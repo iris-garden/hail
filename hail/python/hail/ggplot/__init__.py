@@ -1,5 +1,5 @@
 from .coord_cartesian import coord_cartesian
-from .ggplot import ggplot, GGPlot # noqa F401
+from .ggplot import ggplot, Plot # noqa F401
 from .aes import aes, Aesthetic # noqa F401
 from .geoms import FigureAttribute, geom_line, geom_point, geom_text, geom_bar,\
     geom_histogram, geom_density, geom_func, geom_hline, geom_vline, geom_tile,\
