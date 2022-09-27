@@ -37,7 +37,7 @@
       --hail-light-blue: #6878d1;
       --hail-white: #ffffff;
       --hail-light-gray: #e5e2e0;
-      --hail-medium-gray: #858280;
+      --hail-medium-gray: #757270;
       --hail-black: #000000;
     }
     html {
@@ -57,6 +57,10 @@
     }
     button {
       cursor: pointer;
+      padding-top: 0.2em;
+      padding-bottom: 0.2em;
+      padding-left: 0.5em;
+      padding-right: 0.5em;
     }
     .flex {
       display: flex;
@@ -65,12 +69,11 @@
       flex-direction: column;
       align-items: center;
     }
-    /* TODO what i actually want is to center the search bar and have the icon off to the right */
     .row-center {
-      justify-content: flex-end;
+      justify-content: center;
     }
-    .small-width {
-      width: 32.25%;
+    .width-half {
+      width: 50%;
     }
     .margin-left-half {
       margin-left: 50%;
@@ -80,6 +83,9 @@
     }
     .margin-bottom-small {
       margin-bottom: 2em;
+    }
+    .margin-right-tiny {
+      margin-right: 0.5em;
     }
     .margin-left-tiny {
       margin-left: 0.5em;
@@ -93,6 +99,8 @@
       border-radius: 0.25em;
     }
     button.icon {
+      padding-top: 1px;
+      padding-bottom: 1px;
       padding-left: 0.45em;
       padding-right: 0.45em;
       font-weight: 600;
@@ -125,19 +133,23 @@
     .hidden {
       display: none;
     }
+    .width-third {
+      width: calc(100% / 3);
+    }
     </style>
   </head>
   <body>
   <div id="main" class="flex column-center">
     <h1 class="margin-bottom-mini">Batches</h1>
     <div id="content" class="flex column-center">
-      <div class="flex row-center small-width margin-bottom-small">
-        <form method="GET" action="/batches" class="flex">
-          <input id="searchBar" name="q" size="30" type="text" class="black-and-white">
+      <form method="GET" action="/batches" class="flex row-center width-half margin-bottom-small">
+        <div class="width-third"></div>
+        <input id="searchBar" name="q" type="text" class="width-third black-and-white">
+        <div class="width-third">
           <button type="submit" class="black-and-white margin-left-tiny">Search</button>
-        </form>
-        <button class="icon dark-blue margin-left-small">?</button>
-      </div>
+          <button class="icon dark-blue margin-left-small">?</button>
+        </div>
+      </form>
 	<div class="hidden">
 	  <p>Search batches with the given search terms.  Return batches
 	    that match all terms.  Terms:</p>
