@@ -35,7 +35,10 @@
     :root {
       --hail-dark-blue: #283891;
       --hail-light-blue: #6878d1;
+        /* TODO instead of delete buttons have multi-select and action dropdown */
+      --hail-dark-red: #983821;
       --hail-white: #ffffff;
+      --hail-lighter-gray: #efecea;
       --hail-light-gray: #e5e2e0;
       --hail-medium-gray: #757270;
       --hail-black: #000000;
@@ -52,8 +55,10 @@
         "Apple Color Emoji",
         "Segoe UI Emoji",
         "Segoe UI Symbol";
-      width: 90vw;
       background-color: var(--hail-white);
+    }
+    html, .page-width {
+      width: 100vw;
     }
     button {
       cursor: pointer;
@@ -79,7 +84,7 @@
       margin-left: 50%;
     }
     .margin-left-small {
-      margin-left: 2em;
+      margin-left: 2.5em;
     }
     .margin-bottom-small {
       margin-bottom: 2em;
@@ -134,23 +139,75 @@
       display: none;
     }
     .width-third {
-      width: calc(100% / 3);
+      width: 36%;
+    }
+    .width-middle-third {
+      width: 28%;
+    }
+    th {
+      background-color: var(--hail-light-gray);
+    }
+    tr:nth-of-type(even) {
+      background-color: var(--hail-lighter-gray);
+    }
+    table {
+      overflow: hidden;
+    }
+    table, th, td {
+      border-width: 0.5px;
+      border-style: solid;
+      border-color: var(--hail-medium-gray);
+      border-spacing: 0;
+    }
+    button.red {
+      color: var(--hail-white);
+      border-color: var(--hail-dark-red);
+      background-color: var(--hail-dark-red);
+    }
+    button.red:hover {
+    }
+    th, td {
+      padding-left: 0.25em;
+      padding-right: 0.25em;
+      padding-top: 0.25em;
+      padding-bottom: 0.25em;
+    }
+    td {
+      text-align: center;
+    }
+    /* TODO this is kinda hacky and has like a weird look where part of the border is lighter on the corners? */
+    table {
+      border-radius: 0.5em;
+    }
+    tr:first-child th:first-child {
+      border-top-left-radius: 0.5em;
+    }
+    tr:first-child th:last-child {
+      border-top-right-radius: 0.5em;
+    }
+    tr:last-child td:first-child {
+      border-bottom-left-radius: 0.5em;
+    }
+    tr:last-child td:last-child {
+      border-bottom-right-radius: 0.5em;
     }
     </style>
   </head>
-  <body>
-  <div id="main" class="flex column-center">
+  <body class="page-width">
+  <div id="main" class="page-width flex column-center">
     <h1 class="margin-bottom-mini">Batches</h1>
     <div id="content" class="flex column-center">
+      <!-- TODO style this like a bootstrap input group where the search button is part of the input and center the combined element to the heading -->
       <form method="GET" action="/batches" class="flex row-center width-half margin-bottom-small">
         <div class="width-third"></div>
-        <input id="searchBar" name="q" type="text" class="width-third black-and-white">
+        <input id="searchBar" name="q" type="text" class="width-middle-third black-and-white" placeholder="search...">
         <div class="width-third">
-          <button type="submit" class="black-and-white margin-left-tiny">Search</button>
-          <button class="icon dark-blue margin-left-small">?</button>
+          <!-- <button type="submit" class="black-and-white margin-left-tiny">Search</button> -->
+          <button type="button" class="icon dark-blue margin-left-small">?</button>
         </div>
       </form>
-	<div class="hidden">
+      <!-- TODO show help text when help button clicked -->
+	<div id="search-help-text" class="hidden">
 	  <p>Search batches with the given search terms.  Return batches
 	    that match all terms.  Terms:</p>
 	  <ul>
@@ -212,6 +269,7 @@
 	      
 	    </td>
 	    <td>
+        <!-- TODO format these more readably with a mouseover/alt-text thingy for the more specific timing -->
 	      
 	      2022-09-22T16:30:18Z
 	      
@@ -244,7 +302,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -293,7 +351,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -342,7 +400,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -391,7 +449,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -440,7 +498,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -489,7 +547,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -538,7 +596,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -587,7 +645,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -636,7 +694,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -685,7 +743,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -734,7 +792,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -783,7 +841,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -832,7 +890,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -881,7 +939,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -930,7 +988,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -979,7 +1037,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1028,7 +1086,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1077,7 +1135,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1126,7 +1184,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1175,7 +1233,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1224,7 +1282,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1273,7 +1331,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1322,7 +1380,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1371,7 +1429,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1420,7 +1478,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1469,7 +1527,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1518,7 +1576,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1567,7 +1625,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1616,7 +1674,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1665,7 +1723,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1714,7 +1772,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1763,7 +1821,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1812,7 +1870,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1861,7 +1919,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1910,7 +1968,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -1959,7 +2017,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2008,7 +2066,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2057,7 +2115,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2106,7 +2164,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2155,7 +2213,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2204,7 +2262,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2253,7 +2311,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2302,7 +2360,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2351,7 +2409,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2400,7 +2458,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2449,7 +2507,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2498,7 +2556,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2547,7 +2605,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2596,7 +2654,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
@@ -2645,7 +2703,7 @@
 		
 		<input type="hidden" name="q" value="">
 		
-		<button>Delete</button>
+		<button class="red">Delete</button>
 	      </form>
 	    </td>
 	  </tr>
