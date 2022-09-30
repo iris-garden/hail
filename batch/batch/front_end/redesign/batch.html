@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf8" />
+    <link href="styles/base.css" rel="stylesheet" />
+    <link href="styles/batch.css" rel="stylesheet" />
+  </head>
+  <body>
+    <!-- TODO add a bunch of sample data from an actual batch, and design the collapsed looks -->
+    <h1>Batch <span class="text-color">#5386409</span></h1>
+    <div class="width-most flex justify-center">
+      <div class="width-third card">
+        <!-- TODO add button that explicitly says expand/collapse like resolved comments on GH PRs instead of having the header be a button with no explanation -->
+        <h2 class="card-header button" id="done">Done</h2>
+        <div class="card-body child-done">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Time Elapsed</th>
+                <th>Created Jobs</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <a href="/batch.html">Job 4</a>
+                </td>
+                <td>1 minute</td>
+                <td>
+                  <a href="/batch.html">Job 1</a>, <a href="/batch.html">Job 3</a>, and <a href="/batch.html">Job 7</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="width-third card">
+        <h2 class="card-header button" id="running">Running</h2>
+        <div class="card-body child-running">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Time Elapsed</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <a href="/batch.html">Job 1</a>
+                </td>
+                <td>1 minute</td>
+              </tr>
+              <tr>
+                <td>
+                  <a href="/batch.html">Job 3</a>
+                </td>
+                <td>2 minute</td>
+              </tr>
+              <tr>
+                <td>
+                  <a href="/batch.html">Job 7</a>
+                </td>
+                <td>20 seconds</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="width-third card">
+        <h2 class="card-header button" id="up-next">Up Next</h2>
+        <div class="card-body child-up-next">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Waiting on</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <a href="/batch.html">Job 2</a>
+                </td>
+                <td>
+                  <a href="/batch.html">Job 1</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <a href="/batch.html">Job 5</a>
+                </td>
+                <td>
+                  <a href="/batch.html">Job 1</a>, <a href="/batch.html">Job 3</a>, and <a href="/batch.html">Job 7</a>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  <a href="/batch.html">Job 6</a>
+                </td>
+                <td>
+                  <a href="/batch.html">Job 5</a> and <a href="/batch.html">Job 7</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="scripts/batch.js"></script>
+  </body>
+</html>
