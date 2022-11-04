@@ -1,58 +1,81 @@
 # [MLIR](https://mlir.llvm.org) + [hail](https://hail.is) = 🚀🧬?
 
-## Building/Installing LLVM and MLIR
-Obviously, update the paths for your environment. `$HAIL_DIR` is the root of the
-hail repository.
+## Setting up your shell environment
+
+In your shell configuration file (e.g. `~/.bashrc` for `bash`), add the
+following:
 
 ```sh
-git clone https://github.com/llvm/llvm-project.git
-mkdir llvm-project/build
-cd llvm-project/build
-git checkout llvmorg-15.0.3  # latest stable LLVM/MLIR release
+export HAIL_DIRECTORY=$HOME/src/hail
+export HAIL_NATIVE_COMPILER_DIRECTORY=$HAIL_DIRECTORY/query
+export HAIL_NATIVE_COMPILER_BUILD_DIRECTORY=$HAIL_NATIVE_COMPILER_DIRECTORY/build
 
-# Some notes:
-#     1. -G Ninja generates a build.ninja file rather than makefiles it's not
-#        required but is recommended by LLVM
-#     2. The CMAKE_INSTALL_PREFIX I put here is a subdirectory of the mlir-hail
-#        (this repo's) root. If you do this, add that directory to
-#        .git/info/exclude and it will be like adding it to a gitignore
-#     3. On linux, using lld via -DLLVM_ENABLE_LLD=ON can speed up the build due
-#        to faster linking.
-#
-# The -DLLVM_BUILD_EXAMPLES=ON flag is optional.
-cmake ../llvm -G Ninja \
-   -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;mlir" \
-   -DLLVM_BUILD_EXAMPLES=ON \
-   -DLLVM_TARGETS_TO_BUILD="AArch64;X86;NVPTX;AMDGPU" \
-   -DCMAKE_BUILD_TYPE=Release \
-   -DLLVM_ENABLE_ASSERTIONS=ON \
-   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-   -DCMAKE_INSTALL_PREFIX=$HAIL_DIR/query/.dist/llvm \
-   -DCMAKE_EXPORT_COMPILE_COMMANDS=1
-ninja # this will take a while
-ninja install
+export LLVM_DIRECTORY=$HOME/src/llvm-project
+export LLVM_BUILD_DIRECTORY=$LLVM_DIRECTORY/build
+export LLVM_BUILD_BIN_DIRECTORY=$LLVM_BUILD_DIRECTORY/bin
+
+export PATH=$LLVM_BUILD_BIN_DIRECTORY:$PATH
 ```
 
-## Building the hail-query-mlir project
+Replace the path for `HAIL_DIRECTORY` with the path to the root of your local
+clone of the Hail repository.
 
-To set up the build, from this directory:
+Replace the path for `LLVM_DIRECTORY` with the path where you would like the
+local clone of the LLVM repository to live (but make sure to include
+`llvm-project` at the end, as this is the name of the folder that will be the
+root of the repository).
+
+Add the following to your shell configuration file to include the build scripts
+on your `PATH` as well, if they're not already on there:
 
 ```sh
-mkdir build
-cd build
-# You can set CC and CXX or use -DCMAKE_C_COMPILER and -DCMAKE_CXX_COMPILER to
-# change the C and C++ compilers used to build this project.
-cmake .. -G Ninja \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DMLIR_DIR=$HAIL_DIR/.dist/llvm/lib/cmake/mlir \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-  -DLLVM_BUILD_BINARY_DIR=~/src/llvm-project/build/bin \
-  # ^ this argument is necessary to find llvm-lit and FileCheck for the tests
-  #   they are skipped and a warning printed otherwise
+export HAIL_DEVBIN_DIRECTORY=$HAIL_DIRECTORY/devbin
+export PATH=$HAIL_DEVBIN_DIRECTORY:$PATH
 ```
 
-To build:
+Refresh your shell configuration. For example, if you use `bash`:
+
 ```sh
-cd build
-ninja
+source ~/.bashrc
 ```
+
+## Building LLVM
+
+Clone the LLVM repository and switch the version to that of the latest
+stable release:
+
+```sh
+git clone https://github.com/llvm/llvm-project.git $LLVM_DIRECTORY
+```
+
+Look at the `cmake` invocation in `$HAIL_DEVBIN_DIRECTORY/hail-build-llvm` and
+update it as desired.
+
+Then, run the build for LLVM (this will take quite a while):
+
+```sh
+hail-build-llvm
+```
+
+## Building Hail's native compiler
+
+Look at the `cmake` invocation in
+`$HAIL_DEVBIN_DIRECTORY/hail-build-native-compiler` and update it as desired.
+
+Then, run the build for Hail's native compiler:
+
+```sh
+hail-build-native-compiler
+```
+
+## Setting up your editor
+
+You can use the Language Servers that ship with MLIR to provide you with
+compiler errors, go-to-definition, and other functionality directly in your
+editor. Here are some editor configurations used by members of the Hail team:
+
+### Visual Studio Code
+
+### Vim
+
+### Emacs
