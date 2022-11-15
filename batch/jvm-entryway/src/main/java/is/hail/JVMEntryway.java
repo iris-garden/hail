@@ -13,68 +13,129 @@ import org.apache.logging.log4j.*;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.Configurator;
 
-class JVMEntryway {
-  private static final Logger log = LogManager.getLogger(JVMEntryway.class); // this will initialize log4j which is required for us to access the QoBAppender in main
-  private static final HashMap<String, ClassLoader> classLoaders = new HashMap<>();
+enum ExitCode {
+  USER_EXCEPTION,
+  ENTRYWAY_EXCEPTION,
+  NORMAL,
+  CANCELLED,
+  JVM_EOS, // NEVER USED ON JVM SIDE
+  QOB_EXCEPTION
+}
 
-  public static String throwableToString(Throwable t) throws IOException {
+abstract class ClassLoaderRunnable implements Runnable {
+  ClassLoader classLoader;
+  ClassLoaderRunnable (ClassLoader classLoader) {
+    this.classLoader = classLoader;
+  }
+  abstract void command();
+  public void run() {
+    ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
+    Thread.currentThread().setContextClassLoader(this.classLoader);
+    try {
+      this.command();
+    } finally {
+      QoBOutputStreamManager.flushAllAppenders();
+      Thread.currentThread().setContextClassLoader(oldClassLoader);
+    }
+  }
+}
+
+class JVMEntryway {
+  private static final Logger log = LogManager.getLogger(JVMEntryway.class); // this will initialize log4j which is required for us to access the QoBOutputStreamManager in main
+  static void finishException(ExitCode type, DataOutputStream out, Throwable t) throws IOException {
+    out.writeInt(type.ordinal());
     try (StringWriter sw = new StringWriter();
          PrintWriter pw = new PrintWriter(sw)) {
       t.printStackTrace(pw);
-      return sw.toString();
+      byte[] bytes = sw.toString().getBytes(StandardCharsets.UTF_8);
+      out.writeInt(bytes.length);
+      out.write(bytes);
     }
   }
+  static Throwable cancelThreadRetrieveException(Future f) {
+    f.cancel(true);
+    return retrieveException(f);
+  }
+  static Throwable retrieveException(Future f) {
+    try {
+      f.get();
+    } catch (CancellationException e) {
+    } catch (Throwable t) {
+      return t;
+    }
+    return null;
+  }
+  static void cancelAndAddSuppressed(Future f, Throwable t) {
+    if (f != null) {
+      Throwable t2 = cancelThreadRetrieveException(f);
+      if (t2 != null) {
+        t.addSuppressed(t2);
+      }
+    }
+  }
+  public static void main(String[] args) throws
+    ClassNotFoundException, IllegalArgumentException, IOException, MalformedURLException,
+    NoSuchMethodException, RuntimeException, SocketException, URISyntaxException {
+    // parse arguments
+    String socketAddress = args.length > 0 ? args[0] : null;
+    if (socketAddress == null) {
+      throw new IllegalArgumentException("missing positional argument 'socketAddress'");
+    }
 
-  private static int FINISH_USER_EXCEPTION = 0;
-  private static int FINISH_ENTRYWAY_EXCEPTION = 1;
-  private static int FINISH_NORMAL = 2;
-  private static int FINISH_CANCELLED = 3;
-  private static int FINISH_JVM_EOS = 4;  // NEVER USED ON JVM SIDE
-
-  public static void main(String[] args) throws Exception {
-    assert args.length == 1;
+    // start server
     AFUNIXServerSocket server = AFUNIXServerSocket.newInstance();
-    server.bind(new AFUNIXSocketAddress(new File(args[0])));
-    System.err.println("listening on " + args[0]);
+    server.bind(new AFUNIXSocketAddress(new File(socketAddress)));
+    System.err.println("listening on " + socketAddress);
+
+    // test that reading/writing works on socket
     try (AFUNIXSocket socket = server.accept()) {
       System.err.println("negotiating start up with worker");
       DataInputStream in = new DataInputStream(socket.getInputStream());
       DataOutputStream out = new DataOutputStream(socket.getOutputStream());
       System.err.flush();
       out.writeBoolean(true);
-      assert(in.readBoolean());
+      if (!in.readBoolean()) {
+        System.err.println("read 'false' from socket");
+        throw new SocketException("error writing to/reading from socket");
+      }
     }
+
+    // initialize variables outside of loop
     ExecutorService executor = Executors.newFixedThreadPool(2);
+    HashMap<String, ClassLoader> classLoaders = new HashMap<>();
+
+    // listen on socket
     while (true) {
       try (AFUNIXSocket socket = server.accept()) {
         System.err.println("connection accepted");
         DataInputStream in = new DataInputStream(socket.getInputStream());
         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-        int nRealArgs = in.readInt();
-        System.err.println("reading " + nRealArgs + " arguments");
-        String[] realArgs = new String[nRealArgs];
-        for (int i = 0; i < nRealArgs; ++i) {
+
+        // parse arguments from socket
+        int socketArgsLength = in.readInt();
+        System.err.println("reading " + socketArgsLength + " arguments");
+        String[] socketArgs = new String[socketArgsLength];
+        for (int i = 0; i < socketArgsLength; ++i) {
           int length = in.readInt();
           byte[] bytes = new byte[length];
           System.err.println("reading " + i + ": length=" + length);
           in.read(bytes);
-          realArgs[i] = new String(bytes);
-          System.err.println("reading " + i + ": " + realArgs[i]);
+          socketArgs[i] = new String(bytes);
+          System.err.println("reading " + i + ": " + socketArgs[i]);
+        }
+        if (socketArgs.length < 4) {
+          throw new IllegalArgumentException("wrong number of arguments specified on socket (expected 4 or more)");
         }
 
-        assert realArgs.length >= 4;
-        String classPath = realArgs[0];
-        String mainClass = realArgs[1];
-        String scratchDir = realArgs[2];
-        String logFile = realArgs[3];
-
+        // get classloader from cache or create from url
+        String classPath = socketArgs[0];
         ClassLoader cl = classLoaders.get(classPath);
         if (cl == null) {
           System.err.println("no extant classLoader for " + classPath);
           String[] urlStrings = classPath.split(",");
           ArrayList<URL> urls = new ArrayList<>();
-          for (int i = 0; i < urlStrings.length; ++i) {
-            File file = new File(urlStrings[i]);
+          for (final String urlString : urlStrings) {
+            File file = new File(urlString);
             urls.add(file.toURI().toURL());
             if (file.isDirectory()) {
               for (final File f : file.listFiles()) {
@@ -87,110 +148,105 @@ class JVMEntryway {
         } else {
           System.err.println("reusing extant classLoader for " + classPath);
         }
+        
+        // load root class and get main method
         final ClassLoader hailRootCL = cl;
-
-        Class<?> klass = hailRootCL.loadClass(mainClass);
+        Class<?> klass = hailRootCL.loadClass(socketArgs[1]);
         System.err.println("class loaded");
         Method main = klass.getDeclaredMethod("main", String[].class);
-        System.err.println("main method got");
+        System.err.println("main method loaded");
 
-        QoBOutputStreamManager.changeFileInAllAppenders(logFile);
+        QoBOutputStreamManager.changeFileInAllAppenders(socketArgs[3]);
         log.info("is.hail.JVMEntryway received arguments:");
-        for (int i = 0; i < nRealArgs; ++i) {
-          log.info(i + ": " + realArgs[i]);
+        for (int i = 0; i < socketArgsLength; ++i) {
+          log.info(i + ": " + socketArgs[i]);
         }
         log.info("Yielding control to the QoB Job.");
 
+        // set up threads
         CompletionService<?> gather = new ExecutorCompletionService<Object>(executor);
         Future<?> mainThread = null;
         Future<?> shouldCancelThread = null;
         Future<?> completedThread = null;
-        Throwable entrywayException = null;
-        try {
-          mainThread = gather.submit(new Runnable() {
-              public void run() {
-                ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
-                Thread.currentThread().setContextClassLoader(hailRootCL);
-                try {
-                  String[] mainArgs = new String[nRealArgs - 2];
-                  for (int i = 2; i < nRealArgs; ++i) {
-                    mainArgs[i-2] = realArgs[i];
-                  }
-                  main.invoke(null, (Object) mainArgs);
-                } catch (IllegalAccessException | InvocationTargetException e) {
-                  log.error("QoB Job threw an exception.", e);
-                  throw new RuntimeException(e);
-                } catch (Exception e) {
-                  log.error("QoB Job threw an exception.", e);
-                } finally {
-                  QoBOutputStreamManager.flushAllAppenders();
-                  Thread.currentThread().setContextClassLoader(oldClassLoader);
-                }
-              }
-            }, null);
-          shouldCancelThread = gather.submit(new Runnable() {
-              public void run() {
-                ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
-                Thread.currentThread().setContextClassLoader(hailRootCL);
-                try {
-                  int i = in.readInt();
-                  assert i == 0 : i;
-                } catch (IOException e) {
-                  log.error("Exception encountered in QoB cancel thread.", e);
-                  throw new RuntimeException(e);
-                } catch (Exception e) {
-                  log.error("Exception encountered in QoB cancel thread.", e);
-                } finally {
-                  QoBOutputStreamManager.flushAllAppenders();
-                  Thread.currentThread().setContextClassLoader(oldClassLoader);
-                }
-              }
-            }, null);
-          completedThread = gather.take();
-        } catch (Throwable t) {
-          entrywayException = t;
-        }
 
-        if (entrywayException != null) {
+        try {
+          // submit threads
+          mainThread = gather.submit(new ClassLoaderRunnable(hailRootCL) {
+            void command() {
+              try {
+                main.invoke(null, (Object) Arrays.copyOfRange(socketArgs, 2, socketArgsLength));
+              } catch (IllegalAccessException | InvocationTargetException e) {
+                log.error("QoB Job threw an exception.", e);
+                throw new RuntimeException(e);
+              } catch (Exception e) {
+                log.error("QoB Job threw an exception.", e);
+              }
+            }
+          }, null);
+          shouldCancelThread = gather.submit(new ClassLoaderRunnable(hailRootCL) {
+            void command() {
+              try {
+                int i = in.readInt();
+                if (i != 0) {
+                  throw new RuntimeException(Integer.toString(i));
+                }
+              } catch (IOException e) {
+                log.error("Exception encountered in QoB cancel thread.", e);
+                throw new RuntimeException(e);
+              } catch (Exception e) {
+                log.error("Exception encountered in QoB cancel thread.", e);
+              }
+            }
+          }, null);
+
+          // wait for threads to complete and check which one completed
+          completedThread = gather.take();
+          if (completedThread == null) {
+            throw new RuntimeException("no thread completed");
+          }
+          boolean wasCancelled = completedThread != mainThread;
+          if (!wasCancelled) {
+            System.err.println("main thread done");
+          } else {
+            if (completedThread != shouldCancelThread) {
+              throw new RuntimeException("unknown thread completed");
+            }
+            System.err.println("cancelled");
+          }
+
+          // determine exit code and write output
+          Throwable finishedException = retrieveException(wasCancelled ? shouldCancelThread : mainThread);
+          Throwable secondaryException = cancelThreadRetrieveException(wasCancelled ? mainThread : shouldCancelThread);
+          boolean hasFinishedException = finishedException != null;
+          boolean hasSecondaryException = secondaryException != null;
+          String finishedExceptionType = finishedException.getClass().getName();
+          // FIXME is the exception class actually one of these when we get that exception from scala running in the thread?
+          boolean hasHailException = finishedExceptionType == "HailBatchError" || finishedExceptionType == "HailWorkerFailure";
+          if (hasFinishedException && hasSecondaryException) {
+            finishedException.addSuppressed(secondaryException);
+          }
+          if (hasFinishedException && wasCancelled) {
+            finishException(ExitCode.ENTRYWAY_EXCEPTION, out, finishedException);
+          } else if (hasFinishedException && hasHailException) {
+            finishException(ExitCode.QOB_EXCEPTION, out, finishedException);
+          } else if (hasFinishedException) {
+            finishException(ExitCode.USER_EXCEPTION, out, finishedException);
+          } else if (hasSecondaryException && wasCancelled) {
+            finishException(ExitCode.USER_EXCEPTION, out, secondaryException);
+          } else if (hasSecondaryException) {
+            finishException(ExitCode.ENTRYWAY_EXCEPTION, out, secondaryException);
+          } else if (wasCancelled) {
+            out.writeInt(ExitCode.CANCELLED.ordinal());
+          } else {
+            out.writeInt(ExitCode.NORMAL.ordinal());
+          }
+        } catch (Throwable entrywayException) {
+          // cancel threads and propagate exceptions
           System.err.println("exception in entryway code");
           entrywayException.printStackTrace();
-
-          if (mainThread != null) {
-            Throwable t2 = cancelThreadRetrieveException(mainThread);
-            if (t2 != null) {
-              entrywayException.addSuppressed(t2);
-            }
-          }
-
-          if (shouldCancelThread != null) {
-            Throwable t2 = cancelThreadRetrieveException(shouldCancelThread);
-            if (t2 != null) {
-              entrywayException.addSuppressed(t2);
-            }
-          }
-
-          finishEntrywayException(out, entrywayException);
-        } else {
-          assert(completedThread != null);
-
-          if (completedThread == mainThread) {
-            System.err.println("main thread done");
-            finishFutures(out,
-                          FINISH_NORMAL,
-                          FINISH_USER_EXCEPTION,
-                          mainThread,
-                          FINISH_ENTRYWAY_EXCEPTION,
-                          shouldCancelThread);
-          } else {
-            assert(completedThread == shouldCancelThread);
-            System.err.println("cancelled");
-            finishFutures(out,
-                          FINISH_CANCELLED,
-                          FINISH_ENTRYWAY_EXCEPTION,
-                          shouldCancelThread,
-                          FINISH_USER_EXCEPTION,
-                          mainThread);
-          }
+          cancelAndAddSuppressed(mainThread, entrywayException);
+          cancelAndAddSuppressed(shouldCancelThread, entrywayException);
+          finishException(ExitCode.ENTRYWAY_EXCEPTION, out, entrywayException);
         }
       } finally {
         QoBOutputStreamManager.flushAllAppenders();
@@ -200,62 +256,11 @@ class JVMEntryway {
         System.err.println("reconfiguring logging " + url.toString());
         context.setConfigLocation(url.toURI()); // this will force a reconfiguration
       }
+
+      // restart loop and wait for another connection on socket
       System.err.println("waiting for next connection");
       System.err.flush();
       System.out.flush();
     }
   }
-
-  private static void finishFutures(DataOutputStream out,
-                                    int finishedNormalType,
-                                    int finishedExceptionType,
-                                    Future finished,
-                                    int secondaryExceptionType,
-                                    Future secondary) throws IOException {
-    Throwable finishedException = retrieveException(finished);
-    Throwable secondaryException = cancelThreadRetrieveException(secondary);
-
-    if (finishedException != null) {
-      if (secondaryException != null) {
-        finishedException.addSuppressed(secondaryException);
-      }
-      finishException(finishedExceptionType, out, finishedException);
-    } else if (secondaryException != null) {
-      finishException(secondaryExceptionType, out, secondaryException);
-    } else {
-      out.writeInt(finishedNormalType);
-    }
-  }
-
-  private static void finishUserException(DataOutputStream out, Throwable t) throws IOException {
-    finishException(FINISH_USER_EXCEPTION, out, t);
-  }
-
-  private static void finishEntrywayException(DataOutputStream out, Throwable t) throws IOException {
-    finishException(FINISH_ENTRYWAY_EXCEPTION, out, t);
-  }
-
-  private static void finishException(int type, DataOutputStream out, Throwable t) throws IOException {
-    out.writeInt(type);
-    String s = throwableToString(t);
-    byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-    out.writeInt(bytes.length);
-    out.write(bytes);
-  }
-
-  private static Throwable cancelThreadRetrieveException(Future f) {
-    f.cancel(true);
-    return retrieveException(f);
-  }
-
-  private static Throwable retrieveException(Future f) {
-    try {
-      f.get();
-    } catch (CancellationException e) {
-    } catch (Throwable t) {
-      return t;
-    }
-    return null;
-  }
 }
-
