@@ -237,6 +237,26 @@ resource "google_sql_database_instance" "db" {
       private_network = google_compute_network.default.id
       require_ssl = true
     }
+    database_flags {
+      name = "innodb_log_buffer_size"
+      value = "536870912"
+    }
+    database_flags {
+      name = "innodb_log_file_size"
+      value = "5368709120"
+    }
+    database_flags {
+      name = "event_scheduler"
+      value = "on"
+    }
+    database_flags {
+      name = "skip_show_database"
+      value = "on"
+    }
+    database_flags {
+      name = "local_infile"
+      value = "off"
+    }
   }
 }
 
@@ -504,8 +524,7 @@ resource "google_project_iam_member" "batch_agent_iam_member" {
     "compute.instanceAdmin.v1",
     "iam.serviceAccountUser",
     "logging.logWriter",
-    "storage.objectCreator",
-    "storage.objectViewer",
+    "storage.objectAdmin",
   ])
 
   project = var.gcp_project
@@ -655,7 +674,7 @@ locals {
 module "ci" {
   source = "./ci"
   count = local.ci_config != null ? 1 : 0
-  
+
   github_oauth_token = local.ci_config.data["github_oauth_token"]
   github_user1_oauth_token = local.ci_config.data["github_user1_oauth_token"]
   watched_branches = jsondecode(local.ci_config.raw).watched_branches

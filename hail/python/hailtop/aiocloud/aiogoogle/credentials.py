@@ -65,18 +65,19 @@ class GoogleCredentials(CloudCredentials):
         credentials_file = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
 
         if credentials_file is None:
-            application_default_credentials_file = f'{os.environ["HOME"]}/.config/gcloud/application_default_credentials.json'
-            if os.path.exists(application_default_credentials_file):
-                credentials_file = application_default_credentials_file
+            if "HOME" in os.environ:
+                application_default_credentials_file = f'{os.environ["HOME"]}/.config/gcloud/application_default_credentials.json'
+                if os.path.exists(application_default_credentials_file):
+                    credentials_file = application_default_credentials_file
 
         if credentials_file:
             creds = GoogleCredentials.from_file(credentials_file)
             log.info(f'using credentials file {credentials_file}: {creds}')
             return creds
 
-        log.warning('Unable to locate Google Cloud credentials file')
+        log.info('Unable to locate Google Cloud credentials file')
         if GoogleInstanceMetadataCredentials.available():
-            log.warning('Will attempt to use instance metadata server instead')
+            log.info('Will attempt to use instance metadata server instead')
             return GoogleInstanceMetadataCredentials()
 
         log.warning('Using anonymous credentials. If accessing private data, '

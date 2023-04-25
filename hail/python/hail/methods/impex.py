@@ -1,11 +1,13 @@
 import json
 import os
 import re
+from collections import defaultdict
 from typing import List
 
 import avro.schema
 from avro.datafile import DataFileReader
 from avro.io import DatumReader
+
 import hail as hl
 from hail import ir
 from hail.expr import StructExpression, LocusExpression, \
@@ -21,10 +23,11 @@ from hail.methods.misc import require_biallelic, require_row_key_variant, requir
 from hail.table import Table
 from hail.typecheck import typecheck, nullable, oneof, dictof, anytype, \
     sequenceof, enumeration, sized_tupleof, numeric, table_key_type, char
-from hail.utils.misc import wrap_to_list, plural
-from hail.utils.java import Env, FatalError, jindexed_seq_args, warning
+from hail.utils import new_temp_file
 from hail.utils.deduplicate import deduplicate
-
+from hail.utils.java import Env, FatalError, jindexed_seq_args, warning
+from hail.utils.java import info
+from hail.utils.misc import wrap_to_list, plural
 from .import_lines_helpers import split_lines, should_remove_line
 
 
@@ -121,11 +124,15 @@ def export_gen(dataset, output, precision=4, gp=None, id1=None, id2=None,
 
     require_biallelic(dataset, 'export_gen')
 
+    hl.current_backend().validate_file_scheme(output)
+
     if gp is None:
         if 'GP' in dataset.entry and dataset.GP.dtype == tarray(tfloat64):
             entry_exprs = {'GP': dataset.GP}
         else:
-            entry_exprs = {}
+            raise ValueError('exporting to GEN requires a GP (genotype probability) array<float64> field in the entry'
+                             '\n  of the matrix table. If you only have hard calls (GT), BGEN is probably not the'
+                             '\n  right format.')
     else:
         entry_exprs = {'GP': gp}
 
@@ -176,10 +183,31 @@ def export_gen(dataset, output, precision=4, gp=None, id1=None, id2=None,
            gp=nullable(expr_array(expr_float64)),
            varid=nullable(expr_str),
            rsid=nullable(expr_str),
-           parallel=nullable(ir.ExportType.checker))
-def export_bgen(mt, output, gp=None, varid=None, rsid=None, parallel=None):
+           parallel=nullable(ir.ExportType.checker),
+           compression_codec=enumeration('zlib', 'zstd'))
+def export_bgen(mt, output, gp=None, varid=None, rsid=None, parallel=None, compression_codec='zlib'):
     """Export MatrixTable as :class:`.MatrixTable` as BGEN 1.2 file with 8
     bits of per probability.  Also writes SAMPLE file.
+
+    If `parallel` is ``None``, the BGEN file is written to ``output + '.bgen'``. Otherwise, ``output
+    + '.bgen'`` will be a directory containing many BGEN files. In either case, the SAMPLE file is
+    written to ``output + '.sample'``. For example,
+
+    >>> hl.export_bgen(mt, '/path/to/dataset')  # doctest: +SKIP
+
+    Will write two files: `/path/to/dataset.bgen` and `/path/to/dataset.sample`. In contrast,
+
+    >>> hl.export_bgen(mt, '/path/to/dataset', parallel='header_per_shard')  # doctest: +SKIP
+
+    Will create `/path/to/dataset.sample` and will create ``mt.n_partitions()`` files into the
+    directory `/path/to/dataset.bgen/`.
+
+
+    Notes
+    -----
+    The :func:`export_bgen` function requires genotype probabilities, either as an entry
+    field of `mt` (of type ``array<float64>``), or an entry expression passed in the `gp`
+    argument.
 
     Parameters
     ----------
@@ -201,20 +229,27 @@ def export_bgen(mt, output, gp=None, varid=None, rsid=None, parallel=None):
         used if defined and is of type :py:data:`.tstr`.  The default
         and missing value is ``"."``.
     parallel : :class:`str`, optional
-        If ``None``, write a single BGEN file.  If
-        ``'header_per_shard'``, write a collection of BGEN files (one
-        per partition), each with its own header.  If
-        ``'separate_header'``, write a file for each partition,
-        without header, and a header file for the combined dataset.
+        If ``None``, write a single BGEN file.  If ``'header_per_shard'``, write a collection of
+        BGEN files (one per partition), each with its own header.  If ``'separate_header'``, write a
+        file for each partition, without header, and a header file for the combined dataset. Note
+        that the files produced by ``'separate_header'`` are each individually invalid BGEN files,
+        they can only be read if they are concatenated together with the header file.
+    compresssion_codec : str, optional
+        Compression codec. One of 'zlib', 'zstd'.
+
     """
     require_row_key_variant(mt, 'export_bgen')
     require_col_key_str(mt, 'export_bgen')
+
+    hl.current_backend().validate_file_scheme(output)
 
     if gp is None:
         if 'GP' in mt.entry and mt.GP.dtype == tarray(tfloat64):
             entry_exprs = {'GP': mt.GP}
         else:
-            entry_exprs = {}
+            raise ValueError('exporting to BGEN requires a GP (genotype probability) array<float64> field in the entry'
+                             '\n  of the matrix table. If you only have hard calls (GT), BGEN is probably not the'
+                             '\n  right format.')
     else:
         entry_exprs = {'GP': gp}
 
@@ -236,7 +271,7 @@ def export_bgen(mt, output, gp=None, varid=None, rsid=None, parallel=None):
     for exprs, axis in [(gen_exprs, mt._row_indices),
                         (entry_exprs, mt._entry_indices)]:
         for name, expr in exprs.items():
-            analyze('export_gen/{}'.format(name), expr, axis)
+            analyze('export_bgen/{}'.format(name), expr, axis)
 
     mt = mt._select_all(col_exprs={},
                         row_exprs=gen_exprs,
@@ -244,7 +279,8 @@ def export_bgen(mt, output, gp=None, varid=None, rsid=None, parallel=None):
 
     Env.backend().execute(ir.MatrixWrite(mt._mir, ir.MatrixBGENWriter(
         output,
-        parallel)))
+        parallel,
+        compression_codec)))
 
 
 @typecheck(dataset=MatrixTable,
@@ -330,6 +366,8 @@ def export_plink(dataset, output, call=None, fam_id=None, ind_id=None, pat_id=No
     """
 
     require_biallelic(dataset, 'export_plink', tolerate_generic_locus=True)
+
+    hl.current_backend().validate_file_scheme(output)
 
     if ind_id is None:
         require_col_key_str(dataset, "export_plink")
@@ -504,12 +542,15 @@ def export_vcf(dataset, output, append_to_header=None, parallel=None, metadata=N
         **Note**: This feature is experimental, and the interface and defaults
         may change in future versions.
     """
+    hl.current_backend().validate_file_scheme(output)
+
     _, ext = os.path.splitext(output)
     if ext == '.gz':
         warning('VCF export with standard gzip compression requested. This is almost *never* desired and will '
                 'cause issues with other tools that consume VCF files. The compression format used for VCF '
                 'files is traditionally *block* gzip compression. To use block gzip compression with hail VCF '
                 'export, use a path ending in `.bgz`.')
+
     if isinstance(dataset, Table):
         mt = MatrixTable.from_rows_table(dataset)
         dataset = mt.key_cols_by(sample="")
@@ -930,8 +971,10 @@ def import_fam(path, quant_pheno=False, delimiter=r'\\s+', missing='NA') -> Tabl
 @typecheck(regex=str,
            path=oneof(str, sequenceof(str)),
            max_count=int,
-           show=bool)
-def grep(regex, path, max_count=100, *, show=True):
+           show=bool,
+           force=bool,
+           force_bgz=bool)
+def grep(regex, path, max_count=100, *, show: bool = True, force: bool = False, force_bgz: bool = False):
     r"""Searches given paths for all lines containing regex matches.
 
     Examples
@@ -966,17 +1009,44 @@ def grep(regex, path, max_count=100, *, show=True):
     show : :obj:`bool`
         When `True`, show the values on stdout. When `False`, return a
         dictionary mapping file names to lines.
+    force_bgz : :obj:`bool`
+        If ``True``, read files as blocked gzip files, assuming
+        that they were actually compressed using the BGZ codec. This option is
+        useful when the file extension is not ``'.bgz'``, but the file is
+        blocked gzip, so that the file can be read in parallel and not on a
+        single node.
+    force : :obj:`bool`
+        If ``True``, read gzipped files serially on one core. This should
+        be used only when absolutely necessary, as processing time will be
+        increased due to lack of parallelism.
 
     Returns
     ---
     :obj:`dict` of :class:`str` to :obj:`list` of :obj:`str`
     """
-    jfs = Env.spark_backend('grep').fs._jfs
+    from hail.backend.spark_backend import SparkBackend
+
+    if isinstance(hl.current_backend(), SparkBackend):
+        jfs = Env.spark_backend('grep').fs._jfs
+        if show:
+            Env.backend()._jhc.grepPrint(jfs, regex, jindexed_seq_args(path), max_count)
+            return
+        else:
+            jarr = Env.backend()._jhc.grepReturn(jfs, regex, jindexed_seq_args(path), max_count)
+            return {x._1(): list(x._2()) for x in jarr}
+
+    ht = hl.import_lines(path, force=force, force_bgz=force_bgz)
+    ht = ht.filter(ht.text.matches(regex))
+    ht = ht.head(max_count)
+    lines = ht.collect()
     if show:
-        Env.backend()._jhc.grepPrint(jfs, regex, jindexed_seq_args(path), max_count)
-    else:
-        jarr = Env.backend()._jhc.grepReturn(jfs, regex, jindexed_seq_args(path), max_count)
-        return {x._1(): list(x._2()) for x in jarr}
+        print('\n'.join(line.file + ': ' + line.text for line in lines))
+        return
+
+    results = defaultdict(list)
+    for line in lines:
+        results[line.file].append(line.text)
+    return results
 
 
 @typecheck(path=oneof(str, sequenceof(str)),
@@ -1208,7 +1278,19 @@ def import_bgen(path,
                 raise TypeError(
                     f"'import_bgen' requires all elements in 'variants' are a non-empty prefix of the BGEN key type: {repr(expected_vtype)}")
 
-    reader = ir.MatrixBGENReader(path, sample_file, index_file_map, n_partitions, block_size, variants)
+        vir = variants._tir
+        if isinstance(vir, ir.TableRead) \
+                and isinstance(vir.reader, ir.TableNativeReader) \
+                and vir.reader.intervals is None \
+                and variants.count() == variants.distinct().count():
+            variants_path = vir.reader.path
+        else:
+            variants_path = new_temp_file(prefix='bgen_included_vars', extension='ht')
+            variants.distinct().write(variants_path)
+    else:
+        variants_path = None
+
+    reader = ir.MatrixBGENReader(path, sample_file, index_file_map, n_partitions, block_size, variants_path)
 
     mt = (MatrixTable(ir.MatrixRead(reader))
           .drop(*[fd for fd in ['GT', 'GP', 'dosage'] if fd not in entry_set],
@@ -1625,17 +1707,17 @@ def import_table(paths,
     if should_remove_line_expr is not None:
         ht = ht.filter(should_remove_line_expr, keep=False)
 
-    if len(paths) <= 1:
-        # With zero or one files and no filters, the first row, if it exists must be in the first
-        # partition, so we take this one-pass fast-path.
-        first_row_ht = ht._filter_partitions([0]).head(1)
-    else:
-        first_row_ht = ht.head(1)
-
-    if find_replace is not None:
-        ht = ht.annotate(text=ht['text'].replace(*find_replace))
-
     try:
+        if len(paths) <= 1:
+            # With zero or one files and no filters, the first row, if it exists must be in the first
+            # partition, so we take this one-pass fast-path.
+            first_row_ht = ht._filter_partitions([0]).head(1)
+        else:
+            first_row_ht = ht.head(1)
+
+        if find_replace is not None:
+            ht = ht.annotate(text=ht['text'].replace(*find_replace))
+
         first_rows = first_row_ht.annotate(
             header=first_row_ht.text._split_line(
                 delimiter, missing=hl.empty_array(hl.tstr), quote=quote, regex=len(delimiter) > 1)
@@ -2782,7 +2864,7 @@ def import_gvcfs(path,
     :func:`.import_gvcfs` only keys the resulting matrix tables by ``locus``
     rather than ``locus, alleles``.
     """
-
+    hl.utils.no_service_backend('import_gvcfs')
     rg = reference_genome.name if reference_genome else None
 
     partitions, partitions_type = hl.utils._dumps_partitions(partitions, hl.tstruct(locus=hl.tlocus(rg),
@@ -2841,16 +2923,19 @@ def import_vcfs(path,
            index_file_map=nullable(dictof(str, str)),
            reference_genome=nullable(reference_genome_type),
            contig_recoding=nullable(dictof(str, str)),
-           skip_invalid_loci=bool)
+           skip_invalid_loci=bool,
+           _buffer_size=int)
 def index_bgen(path,
                index_file_map=None,
                reference_genome='default',
                contig_recoding=None,
-               skip_invalid_loci=False):
+               skip_invalid_loci=False,
+               _buffer_size=16_000_000):
     """Index BGEN files as required by :func:`.import_bgen`.
 
-    The index file is generated in the same directory as `path` with the
-    filename of `path` appended by `.idx2` unless `directory` is specified.
+    If `index_file_map` is unspecified, then, for each BGEN file, the index file is written in the
+    same directory and as the associated BGEN file with the same filename appended by
+    `.idx2`. Otherwise, the `index_file_map` must specify a distinct `idx2` path for each BGEN file.
 
     Example
     -------
@@ -2874,7 +2959,8 @@ def index_bgen(path,
     Parameters
     ----------
     path : :class:`str` or :obj:`list` of :obj:`str`
-        .bgen files to index.
+        The .bgen files to index. May be one of: a BGEN file path, a list of BGEN file paths, or the
+        path of a directory that contains BGEN files.
     index_file_map : :obj:`dict` of :class:`str` to :obj:`str`, optional
         Dict of BGEN file to index file location. Index file location must have
         a `.idx2` file extension. Cannot use Hadoop glob patterns in file names.
@@ -2887,12 +2973,50 @@ def index_bgen(path,
         If ``True``, skip loci that are not consistent with `reference_genome`.
 
     """
-    rg = reference_genome.name if reference_genome else None
+    rg_t = hl.tlocus(reference_genome) if reference_genome else hl.tstruct(contig=hl.tstr, position=hl.tint32)
     if index_file_map is None:
         index_file_map = {}
     if contig_recoding is None:
         contig_recoding = {}
-    Env.backend().index_bgen(wrap_to_list(path), index_file_map, rg, contig_recoding, skip_invalid_loci)
+    raw_paths = wrap_to_list(path)
+
+    fs = hl.current_backend().fs
+    paths = []
+    for p in raw_paths:
+        if fs.is_file(p):
+            paths.append(p)
+        else:
+            if not fs.is_dir(p):
+                raise ValueError(f'index_bgen: no file or directory at {p}')
+            for stat_result in fs.ls(p):
+                if re.match(r"^.*part-[0-9]+(-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$",
+                            os.path.basename(stat_result.path)):
+                    paths.append(stat_result.path)
+
+    paths_lit = hl.literal(paths, hl.tarray(hl.tstr))
+    index_file_map_lit = hl.literal(index_file_map, hl.tdict(hl.tstr, hl.tstr))
+    for k, v in index_file_map.items():
+        if not v.endswith('.idx2'):
+            raise FatalError(f"index file for {k} is missing a .idx2 file extension")
+    contig_recoding_lit = hl.literal(contig_recoding, hl.tdict(hl.tstr, hl.tstr))
+    ht = hl.utils.range_table(len(paths), len(paths))
+    path_fd = paths_lit[ht.idx]
+    ht = ht.annotate(n_indexed=hl.expr.functions._func(
+        "index_bgen",
+        hl.tint64,
+        path_fd,
+        index_file_map_lit.get(path_fd, path_fd + ".idx2"),
+        contig_recoding_lit,
+        hl.bool(skip_invalid_loci),
+        hl.int32(_buffer_size),
+        type_args=(rg_t,)))
+
+    for r in ht.collect():
+        idx = r.idx
+        n = r.n_indexed
+        path = paths[idx]
+        idx_path = index_file_map.get(path, path)
+        info(f"indexed {n} sites in {path} at {idx_path}")
 
 
 @typecheck(path=str,
@@ -2972,6 +3096,25 @@ def import_avro(paths, *, key=None, intervals=None):
         raise ValueError('key and intervals must either be both defined or both undefined')
 
     with hl.current_backend().fs.open(paths[0], 'rb') as avro_file:
-        with DataFileReader(avro_file, DatumReader()) as data_file_reader:
-            tr = ir.AvroTableReader(avro.schema.parse(data_file_reader.schema), paths, key, intervals)
+
+        # monkey patch DataFileReader.determine_file_length to account for bug in Google HadoopFS
+
+        def patched_determine_file_length(self) -> int:
+            remember_pos = self.reader.tell()
+            self.reader.seek(-1, 2)
+            file_length = self.reader.tell() + 1
+            self.reader.seek(remember_pos)
+            return file_length
+
+        original_determine_file_length = DataFileReader.determine_file_length
+
+        try:
+            DataFileReader.determine_file_length = patched_determine_file_length
+
+            with DataFileReader(avro_file, DatumReader()) as data_file_reader:
+                tr = ir.AvroTableReader(avro.schema.parse(data_file_reader.schema), paths, key, intervals)
+
+        finally:
+            DataFileReader.determine_file_length = original_determine_file_length
+
     return Table(ir.TableRead(tr))

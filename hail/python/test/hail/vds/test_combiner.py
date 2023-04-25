@@ -6,10 +6,7 @@ from hail.utils.java import Env
 from hail.utils.misc import new_temp_file
 from hail.vds.combiner import combine_variant_datasets, new_combiner, load_combiner, transform_gvcf
 from hail.vds.combiner.combine import defined_entry_fields
-from ..helpers import startTestHailContext, stopTestHailContext, resource, fails_local_backend, fails_service_backend
-
-setUpModule = startTestHailContext
-tearDownModule = stopTestHailContext
+from ..helpers import resource, fails_local_backend, fails_service_backend
 
 
 all_samples = ['HG00308', 'HG00592', 'HG02230', 'NA18534', 'NA20760',
@@ -80,14 +77,14 @@ def test_vcf_vds_combiner_equivalence():
                                       array_elements_required=False)]
     entry_to_keep = defined_entry_fields(vcfs[0].filter_rows(hl.is_defined(vcfs[0].info.END)), 100_000) - {'GT', 'PGT', 'PL'}
     vds = vds.combine_variant_datasets([vds.transform_gvcf(mt, reference_entry_fields_to_keep=entry_to_keep) for mt in vcfs])
-    smt = vcf.combine_gvcfs([vcf.transform_gvcf(mt) for mt in vcfs])
-    smt_from_vds = hl.vds.to_merged_sparse_mt(vds).drop('RGQ')
-    smt = smt.select_entries(*smt_from_vds.entry)  # harmonize fields and order
-    smt = smt.key_rows_by('locus', 'alleles')
-    assert smt._same(smt_from_vds)
+    vds.variant_data = vds.variant_data.drop('RGQ')
+    smt = vcf.combine_gvcfs([vcf.transform_gvcf(mt) for mt in vcfs]).drop('RGQ')
+    vds_from_smt = hl.vds.VariantDataset.from_merged_representation(smt, ref_block_fields=list(vds.reference_data.entry.drop('END')))
+
+    assert vds.variant_data._same(vds_from_smt.variant_data, reorder_fields=True)
+    assert vds.reference_data._same(vds_from_smt.reference_data, reorder_fields=True)
 
 
-@fails_service_backend
 def test_combiner_plan_round_trip_serialization():
     sample_names = all_samples[:5]
     paths = [os.path.join(resource('gvcfs'), '1kg_chr22', f'{s}.hg38.g.vcf.gz') for s in sample_names]
@@ -104,6 +101,53 @@ def test_combiner_plan_round_trip_serialization():
     plan.save()
     plan_loaded = load_combiner(plan_path)
     assert plan == plan_loaded
+
+def test_reload_combiner_plan():
+    sample_names = all_samples[:5]
+    paths = [os.path.join(resource('gvcfs'), '1kg_chr22', f'{s}.hg38.g.vcf.gz') for s in sample_names]
+    plan_path = new_temp_file(extension='json')
+    out_file = new_temp_file(extension='vds')
+    plan = new_combiner(gvcf_paths=paths,
+                        output_path=out_file,
+                        temp_path=Env.hc()._tmpdir,
+                        save_path=plan_path,
+                        reference_genome='GRCh38',
+                        use_exome_default_intervals=True,
+                        branch_factor=2,
+                        batch_size=2)
+    plan.save()
+    plan_loaded = new_combiner(gvcf_paths=paths,
+                               output_path=out_file,
+                               temp_path=Env.hc()._tmpdir,
+                               save_path=plan_path,
+                               reference_genome='GRCh38',
+                               use_exome_default_intervals=True,
+                               branch_factor=2,
+                               batch_size=2)
+    assert plan == plan_loaded
+
+def test_move_load_combiner_plan():
+    fs = hl.current_backend().fs
+    sample_names = all_samples[:5]
+    paths = [os.path.join(resource('gvcfs'), '1kg_chr22', f'{s}.hg38.g.vcf.gz') for s in sample_names]
+    plan_path = new_temp_file(extension='json')
+    out_file = new_temp_file(extension='vds')
+    new_plan_path = new_temp_file(extension='json')
+    plan = new_combiner(gvcf_paths=paths,
+                        output_path=out_file,
+                        temp_path=Env.hc()._tmpdir,
+                        save_path=plan_path,
+                        reference_genome='GRCh38',
+                        use_exome_default_intervals=True,
+                        branch_factor=2,
+                        batch_size=2)
+    plan.save()
+    fs.copy(plan_path, new_plan_path)
+    plan_loaded = load_combiner(new_plan_path)
+    assert plan != plan_loaded
+    plan._save_path = new_plan_path
+    assert plan == plan_loaded
+
 
 @fails_local_backend
 @fails_service_backend

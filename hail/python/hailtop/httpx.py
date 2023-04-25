@@ -1,4 +1,5 @@
 from typing import Any, Tuple, Optional, Type, TypeVar, Generic, Callable, Union
+import asyncio
 from types import TracebackType
 import orjson
 import aiohttp
@@ -86,7 +87,7 @@ class ClientSession:
     def __init__(self,
                  *args,
                  raise_for_status: bool = True,
-                 timeout: Union[aiohttp.ClientTimeout, float] = None,
+                 timeout: Union[aiohttp.ClientTimeout, float, None] = None,
                  **kwargs):
         location = get_deploy_config().location()
         if location == 'external':
@@ -191,6 +192,9 @@ class ClientSession:
 
     async def close(self) -> None:
         await self.client_session.close()
+        # - Following warning mitigation described here: https://github.com/aio-libs/aiohttp/pull/2045
+        # - Fixed in aiohttp 4.0.0: https://github.com/aio-libs/aiohttp/issues/1925
+        await asyncio.sleep(0.250)
 
     @property
     def closed(self) -> bool:
@@ -236,7 +240,7 @@ class BlockingClientResponse:
             encoding=encoding, errors=errors))
 
     def json(self, *,
-             encoding: str = None,
+             encoding: Optional[str] = None,
              loads: aiohttp.typedefs.JSONDecoder = aiohttp.typedefs.DEFAULT_JSON_DECODER,
              content_type: Optional[str] = 'application/json') -> Any:
         return async_to_blocking(self.client_response.json(

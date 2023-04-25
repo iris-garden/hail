@@ -431,6 +431,9 @@ class PR(Code):
             )
             last_known_github_status = PR._hail_github_status_from_statuses(source_sha_json)
             if last_known_github_status != self.last_known_github_status:
+                log.info(
+                    f'{self.short_str()}: new github statuses: {self.last_known_github_status} => {last_known_github_status}'
+                )
                 self.last_known_github_status = last_known_github_status
                 self.target_branch.state_changed = True
 
@@ -483,12 +486,14 @@ mkdir -p {shq(repo_dir)}
 
             with open(f'{repo_dir}/build.yaml', 'r', encoding='utf-8') as f:
                 config = BuildConfiguration(self, f.read(), scope='test')
-                namespace, services = config.deployed_services()
+                namespace = config.namespace()
+                services = config.deployed_services()
             with open(f'{repo_dir}/ci/test/resources/build.yaml', 'r', encoding='utf-8') as f:
-                _, test_services = BuildConfiguration(self, f.read(), scope='test').deployed_services()
+                test_services = BuildConfiguration(self, f.read(), scope='test').deployed_services()
 
             services.extend(test_services)
             tomorrow = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+            assert namespace is not None
             await add_deployed_services(db, namespace, services, tomorrow)
 
             log.info(f'creating test batch for {self.number}')
@@ -623,6 +628,7 @@ mkdir -p {shq(repo_dir)}
         return False
 
     def checkout_script(self):
+        assert self.target_branch.sha
         return f'''
 {clone_or_fetch_script(self.target_branch.branch.repo.url)}
 
@@ -641,7 +647,7 @@ class WatchedBranch(Code):
         self.deployable: bool = deployable
         self.mergeable: bool = mergeable
 
-        self.prs: Dict[str, PR] = {}
+        self.prs: Dict[int, PR] = {}
         self.sha: Optional[str] = None
 
         self.deploy_batch: Union[Batch, MergeFailureBatch, None] = None
@@ -750,7 +756,7 @@ class WatchedBranch(Code):
             self.sha = new_sha
             self.state_changed = True
 
-        new_prs: Dict[str, PR] = {}
+        new_prs: Dict[int, PR] = {}
         async for gh_json_pr in gh.getiter(f'/repos/{repo_ss}/pulls?state=open&base={self.branch.name}'):
             number = gh_json_pr['number']
             if number in self.prs:
@@ -895,11 +901,13 @@ mkdir -p {shq(repo_dir)}
             )
             with open(f'{repo_dir}/build.yaml', 'r', encoding='utf-8') as f:
                 config = BuildConfiguration(self, f.read(), requested_step_names=DEPLOY_STEPS, scope='deploy')
-                namespace, services = config.deployed_services()
+                namespace = config.namespace()
+                services = config.deployed_services()
             with open(f'{repo_dir}/ci/test/resources/build.yaml', 'r', encoding='utf-8') as f:
-                _, test_services = BuildConfiguration(self, f.read(), scope='deploy').deployed_services()
+                test_services = BuildConfiguration(self, f.read(), scope='deploy').deployed_services()
 
             services.extend(test_services)
+            assert namespace is not None
             await add_deployed_services(db, namespace, services, None)
 
             log.info(f'creating deploy batch for {self.branch.short_str()}')
@@ -941,6 +949,7 @@ Deploy config failed to build with exception:
                 await deploy_batch.delete()
 
     def checkout_script(self):
+        assert self.sha
         return f'''
 {clone_or_fetch_script(self.branch.repo.url)}
 
@@ -994,12 +1003,13 @@ mkdir -p {shq(repo_dir)}
                 config = BuildConfiguration(
                     self, f.read(), scope='dev', requested_step_names=steps, excluded_step_names=excluded_steps
                 )
-                namespace, services = config.deployed_services()
+                namespace = config.namespace()
+                services = config.deployed_services()
             with open(f'{repo_dir}/ci/test/resources/build.yaml', 'r', encoding='utf-8') as f:
-                _, test_services = BuildConfiguration(self, f.read(), scope='dev').deployed_services()
-
-            services.extend(test_services)
-            await add_deployed_services(db, namespace, services, None)
+                test_services = BuildConfiguration(self, f.read(), scope='dev').deployed_services()
+            if namespace is not None:
+                services.extend(test_services)
+                await add_deployed_services(db, namespace, services, None)
 
             log.info(f'creating dev deploy batch for {self.branch.short_str()} and user {self.user}')
 

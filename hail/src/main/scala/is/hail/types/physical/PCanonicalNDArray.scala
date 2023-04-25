@@ -2,6 +2,7 @@ package is.hail.types.physical
 
 import is.hail.annotations.{Annotation, NDArray, Region, UnsafeOrdering}
 import is.hail.asm4s.{Code, _}
+import is.hail.backend.HailStateManager
 import is.hail.expr.ir.{CodeParam, CodeParamType, EmitCode, EmitCodeBuilder, Param, ParamType, SCodeParam}
 import is.hail.types.physical.stypes.SValue
 import is.hail.types.physical.stypes.concrete._
@@ -71,7 +72,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
 
   override lazy val alignment: Long = representation.alignment
 
-  override def unsafeOrdering(): UnsafeOrdering = representation.unsafeOrdering()
+  override def unsafeOrdering(sm: HailStateManager): UnsafeOrdering = representation.unsafeOrdering(sm)
 
   def numElements(shape: IndexedSeq[Value[Long]]): Code[Long] = {
     shape.foldLeft(1L: Code[Long])(_ * _)
@@ -81,30 +82,24 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     shape.foldLeft(1L)(_ * _)
   }
 
-  def makeColumnMajorStrides(sourceShapeArray: IndexedSeq[Value[Long]], region: Value[Region], cb: EmitCodeBuilder): IndexedSeq[Value[Long]] = {
-    val runningProduct = cb.newLocal[Long]("make_column_major_strides_prod")
-    val computedStrides = (0 until nDims).map(idx => cb.newField[Long](s"make_column_major_computed_stride_${idx}"))
-
-    cb.assign(runningProduct, elementType.byteSize)
-    (0 until nDims).foreach{ index =>
-      cb.assign(computedStrides(index), runningProduct)
-      cb.assign(runningProduct, runningProduct * (sourceShapeArray(index) > 0L).mux(sourceShapeArray(index), 1L))
+  def makeColumnMajorStrides(sourceShapeArray: IndexedSeq[Value[Long]], cb: EmitCodeBuilder): IndexedSeq[Value[Long]] = {
+    val strides = new Array[Value[Long]](nDims)
+    for (i <- 0 until nDims) {
+      if (i == 0) strides(i) = const(elementType.byteSize)
+      else strides(i) = cb.memoize(strides(i-1) * (sourceShapeArray(i-1) > 0L).mux(sourceShapeArray(i-1), 1L))
     }
 
-    computedStrides
+    strides
   }
 
-  def makeRowMajorStrides(sourceShapeArray: IndexedSeq[Value[Long]], region: Value[Region], cb: EmitCodeBuilder): IndexedSeq[Value[Long]] = {
-    val runningProduct = cb.newLocal[Long]("make_row_major_strides_prod")
-    val computedStrides = (0 until nDims).map(idx => cb.newField[Long](s"make_row_major_computed_stride_${idx}"))
-
-    cb.assign(runningProduct, elementType.byteSize)
-    ((nDims - 1) to 0 by -1).foreach{ index =>
-      cb.assign(computedStrides(index), runningProduct)
-      cb.assign(runningProduct, runningProduct * (sourceShapeArray(index) > 0L).mux(sourceShapeArray(index), 1L))
+  def makeRowMajorStrides(sourceShapeArray: IndexedSeq[Value[Long]], cb: EmitCodeBuilder): IndexedSeq[Value[Long]] = {
+    val strides = new Array[Value[Long]](nDims)
+    for (i <- (nDims - 1) to 0 by -1) {
+      if (i == nDims - 1) strides(i) = const(elementType.byteSize)
+      else strides(i) = cb.memoize(strides(i+1) * (sourceShapeArray(i+1) > 0L).mux(sourceShapeArray(i+1), 1L))
     }
 
-    computedStrides
+    strides
   }
 
   def getElementAddress(indices: IndexedSeq[Long], nd: Long): Long = {
@@ -165,13 +160,21 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     region.allocateSharedChunk(sizeOfArray)
   }
 
-  def constructUnintialized(
+  def constructUninitialized(
     shape: IndexedSeq[SizeValue],
     strides: IndexedSeq[Value[Long]],
     cb: EmitCodeBuilder,
     region: Value[Region]
   ): SNDArrayPointerValue = {
     constructByCopyingDataPointer(shape, strides, this.allocateData(shape, region), cb, region)
+  }
+
+  def constructUninitialized(
+    shape: IndexedSeq[SizeValue],
+    cb: EmitCodeBuilder,
+    region: Value[Region]
+  ): SNDArrayPointerValue = {
+    constructByCopyingDataPointer(shape, makeColumnMajorStrides(shape, cb), this.allocateData(shape, region), cb, region)
   }
 
   def constructByCopyingArray(
@@ -195,7 +198,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
         val shape = (0 until nDims).map(i => SizeValueDyn(mb.getCodeParam[Long](3 + i)))
         val strides = (0 until nDims).map(i => mb.getCodeParam[Long](3 + nDims + i))
 
-        val result = constructUnintialized(shape, strides, cb, region)
+        val result = constructUninitialized(shape, strides, cb, region)
 
         dataValue.st match {
           case SIndexablePointer(PCanonicalArray(otherElementType, _)) if otherElementType == elementType =>
@@ -231,7 +234,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
       case s: SizeValue => s
       case s => SizeValueDyn(s)
     }
-    val result = constructUnintialized(newShape, strides, cb, region)
+    val result = constructUninitialized(newShape, strides, cb, region)
 
     (result.firstDataAddress, (cb: EmitCodeBuilder) => result)
   }
@@ -277,7 +280,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     )
   }
 
-  def _copyFromAddress(region: Region, srcPType: PType, srcAddress: Long, deepCopy: Boolean): Long  = {
+  def _copyFromAddress(sm: HailStateManager, region: Region, srcPType: PType, srcAddress: Long, deepCopy: Boolean): Long  = {
     val srcNDPType = srcPType.asInstanceOf[PCanonicalNDArray]
     assert(nDims == srcNDPType.nDims)
 
@@ -286,7 +289,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     }
 
     val newAddress = this.representation.allocate(region)
-    unstagedStoreAtAddress(newAddress, region, srcPType, srcAddress, deepCopy)
+    unstagedStoreAtAddress(sm, newAddress, region, srcPType, srcAddress, deepCopy)
     newAddress
   }
 
@@ -298,7 +301,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
   def setRequired(required: Boolean): PCanonicalNDArray =
     if(required == this.required) this else PCanonicalNDArray(elementType, nDims, required)
 
-  def unstagedStoreAtAddress(destAddress: Long, region: Region, srcPType: PType, srcAddress: Long, deepCopy: Boolean): Unit = {
+  def unstagedStoreAtAddress(sm: HailStateManager, destAddress: Long, region: Region, srcPType: PType, srcAddress: Long, deepCopy: Boolean): Unit = {
     val srcNDPType = srcPType.asInstanceOf[PCanonicalNDArray]
     assert(nDims == srcNDPType.nDims)
 
@@ -321,8 +324,8 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
       val srcShape = srcPType.asInstanceOf[PNDArray].unstagedLoadShapes(srcAddress)
       val srcStrides = srcPType.asInstanceOf[PNDArray].unstagedLoadStrides(srcAddress)
 
-      shapeType.unstagedStoreJavaObjectAtAddress(destAddress, Row(srcShape:_*), region)
-      strideType.unstagedStoreJavaObjectAtAddress(destAddress + shapeType.byteSize, Row(srcStrides:_*), region)
+      shapeType.unstagedStoreJavaObjectAtAddress(sm, destAddress, Row(srcShape:_*), region)
+      strideType.unstagedStoreJavaObjectAtAddress(sm, destAddress + shapeType.byteSize, Row(srcStrides:_*), region)
 
       val newDataPointer = this.allocateData(srcShape, region)
       Region.storeLong(this.representation.fieldOffset(destAddress, 2), newDataPointer)
@@ -333,7 +336,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
 
       SNDArray.unstagedForEachIndex(srcShape) { indices =>
         val srcElementAddress = srcNDPType.getElementAddress(indices, srcAddress)
-        this.elementType.unstagedStoreAtAddress(currentAddressToWrite, region, srcNDPType.elementType, srcElementAddress, true)
+        this.elementType.unstagedStoreAtAddress(sm, currentAddressToWrite, region, srcNDPType.elementType, srcElementAddress, true)
         currentAddressToWrite += elementType.byteSize
       }
     }
@@ -398,13 +401,13 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
 
   override def unstagedLoadFromNested(addr: Long): Long = addr
 
-  override def unstagedStoreJavaObject(annotation: Annotation, region: Region): Long = {
+  override def unstagedStoreJavaObject(sm: HailStateManager, annotation: Annotation, region: Region): Long = {
     val addr = this.representation.allocate(region)
-    this.unstagedStoreJavaObjectAtAddress(addr, annotation, region)
+    this.unstagedStoreJavaObjectAtAddress(sm, addr, annotation, region)
     addr
   }
 
-  override def unstagedStoreJavaObjectAtAddress(addr: Long, annotation: Annotation, region: Region): Unit = {
+  override def unstagedStoreJavaObjectAtAddress(sm: HailStateManager, addr: Long, annotation: Annotation, region: Region): Unit = {
     val aNDArray = annotation.asInstanceOf[NDArray]
 
     var runningProduct = this.elementType.byteSize
@@ -416,12 +419,12 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     val dataFirstElementAddress = this.allocateData(aNDArray.shape, region)
     var curElementAddress = dataFirstElementAddress
     aNDArray.getRowMajorElements().foreach{ element =>
-      elementType.unstagedStoreJavaObjectAtAddress(curElementAddress, element, region)
+      elementType.unstagedStoreJavaObjectAtAddress(sm, curElementAddress, element, region)
       curElementAddress += elementType.byteSize
     }
     val shapeRow = Row(aNDArray.shape: _*)
     val stridesRow = Row(stridesArray: _*)
-    this.representation.unstagedStoreJavaObjectAtAddress(addr, Row(shapeRow, stridesRow, dataFirstElementAddress), region)
+    this.representation.unstagedStoreJavaObjectAtAddress(sm, addr, Row(shapeRow, stridesRow, dataFirstElementAddress), region)
   }
 
 

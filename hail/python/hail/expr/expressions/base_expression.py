@@ -946,7 +946,7 @@ class Expression(object):
             if self is source.col:
                 return None, source.key_cols_by().cols()
             if self is source.col_key:
-                return None, source.key_cols_by().cols().select()
+                return None, source.select_cols().key_cols_by().cols()
             if self is source.entry:
                 return None, source.select_rows().select_cols()
         return self._to_relational(fallback_name)
@@ -962,52 +962,49 @@ class Expression(object):
         >>> with open('output/gt.tsv', 'r') as f:
         ...     for line in f:
         ...         print(line, end='')
-        locus	alleles	0	1	2	3
-        1:1	["A","C"]	0/1	0/1	0/0	0/0
-        1:2	["A","C"]	1/1	0/1	1/1	1/1
-        1:3	["A","C"]	1/1	0/1	0/1	0/0
-        1:4	["A","C"]	1/1	0/1	1/1	1/1
-        <BLANKLINE>
+        locus      alleles 0       1       2       3
+        1:1        ["A","C"]       0/1     0/1     1/1     0/0
+        1:2        ["A","C"]       1/1     1/1     0/1     1/1
+        1:3        ["A","C"]       0/0     0/0     1/1     0/1
+        1:4        ["A","C"]       0/0     0/0     0/0     1/1
 
         >>> small_mt.GT.export('output/gt-no-header.tsv', header=False)
         >>> with open('output/gt-no-header.tsv', 'r') as f:
         ...     for line in f:
         ...         print(line, end='')
-        1:1	["A","C"]	0/1	0/1	0/0	0/0
-        1:2	["A","C"]	1/1	0/1	1/1	1/1
-        1:3	["A","C"]	1/1	0/1	0/1	0/0
-        1:4	["A","C"]	1/1	0/1	1/1	1/1
-        <BLANKLINE>
+        1:1        ["A","C"]       0/1     0/1     1/1     0/0
+        1:2        ["A","C"]       1/1     1/1     0/1     1/1
+        1:3        ["A","C"]       0/0     0/0     1/1     0/1
+        1:4        ["A","C"]       0/0     0/0     0/0     1/1
 
         >>> small_mt.pop.export('output/pops.tsv')
         >>> with open('output/pops.tsv', 'r') as f:
         ...     for line in f:
         ...         print(line, end='')
-        sample_idx	pop
-        0	2
-        1	2
-        2	0
-        3	2
+        sample_idx      pop
+        0       0
+        1       0
+        2       2
+        3       0
         <BLANKLINE>
 
         >>> small_mt.ancestral_af.export('output/ancestral_af.tsv')
         >>> with open('output/ancestral_af.tsv', 'r') as f:
         ...     for line in f:
         ...         print(line, end='')
-        locus	alleles	ancestral_af
-        1:1	["A","C"]	5.3905e-01
-        1:2	["A","C"]	8.6768e-01
-        1:3	["A","C"]	4.3765e-01
-        1:4	["A","C"]	7.6300e-01
+        locus   alleles ancestral_af
+        1:1     ["A","C"]       3.8152e-01
+        1:2     ["A","C"]       7.0588e-01
+        1:3     ["A","C"]       4.9991e-01
+        1:4     ["A","C"]       3.9616e-01
         <BLANKLINE>
 
-        >>> mt = small_mt
         >>> small_mt.bn.export('output/bn.tsv')
         >>> with open('output/bn.tsv', 'r') as f:
         ...     for line in f:
         ...         print(line, end='')
         bn
-        {"n_populations":3,"n_samples":4,"n_variants":4,"n_partitions":8,"pop_dist":[1,1,1],"fst":[0.1,0.1,0.1],"mixture":false}
+        {"n_populations":3,"n_samples":4,"n_variants":4,"n_partitions":4,"pop_dist":[1,1,1],"fst":[0.1,0.1,0.1],"mixture":false}
         <BLANKLINE>
 
 
@@ -1024,11 +1021,11 @@ class Expression(object):
         >>> with open('output/gt-no-header.tsv', 'r') as f:
         ...     for line in f:
         ...         print(line, end='')
-        locus	alleles	{"s":0,"family":"fam1"}	{"s":1,"family":"fam1"}	{"s":2,"family":"fam1"}	{"s":3,"family":"fam1"}
-        1:1	["A","C"]	0/1	0/1	0/0	0/0
-        1:2	["A","C"]	1/1	0/1	1/1	1/1
-        1:3	["A","C"]	1/1	0/1	0/1	0/0
-        1:4	["A","C"]	1/1	0/1	1/1	1/1
+        locus   alleles {"s":0,"family":"fam1"} {"s":1,"family":"fam1"} {"s":2,"family":"fam1"} {"s":3,"family":"fam1"}
+        1:1     ["A","C"]       0/1     0/1     1/1     0/0
+        1:2     ["A","C"]       1/1     1/1     0/1     1/1
+        1:3     ["A","C"]       0/0     0/0     1/1     0/1
+        1:4     ["A","C"]       0/0     0/0     0/0     1/1
         <BLANKLINE>
 
 

@@ -20,10 +20,9 @@ from hail.ir import (BlockMatrixWrite, BlockMatrixMap2, ApplyBinaryPrimOp, F64,
                      TableFromBlockMatrixNativeReader, TableRead, BlockMatrixSlice,
                      BlockMatrixSparsify, BlockMatrixDensify, RectangleSparsifier,
                      RowIntervalSparsifier, BandSparsifier, PerBlockSparsifier)
-from hail.ir.blockmatrix_reader import (BlockMatrixNativeReader,
-                                        BlockMatrixBinaryReader, BlockMatrixPersistReader)
+from hail.ir.blockmatrix_reader import BlockMatrixNativeReader, BlockMatrixBinaryReader
 from hail.ir.blockmatrix_writer import (BlockMatrixBinaryWriter,
-                                        BlockMatrixNativeWriter, BlockMatrixRectanglesWriter, BlockMatrixPersistWriter)
+                                        BlockMatrixNativeWriter, BlockMatrixRectanglesWriter)
 from hail.ir import ExportType
 from hail.table import Table
 from hail.typecheck import (typecheck, typecheck_method, nullable, oneof,
@@ -458,9 +457,9 @@ class BlockMatrix(object):
         if not block_size:
             block_size = BlockMatrix.default_block_size()
 
-        seed = seed if seed is not None else Env.next_seed()
+        static_rng_uid = seed if seed is not None else Env.next_static_rng_uid()
 
-        rand = BlockMatrixRandom(seed, gaussian, [n_rows, n_cols], block_size)
+        rand = BlockMatrixRandom(static_rng_uid, gaussian, [n_rows, n_cols], block_size)
         return BlockMatrix(rand)
 
     @classmethod
@@ -620,6 +619,8 @@ class BlockMatrix(object):
             If ``True``, major output will be written to temporary local storage
             before being copied to ``output``.
         """
+        hl.current_backend().validate_file_scheme(path)
+
         writer = BlockMatrixNativeWriter(path, overwrite, force_row_major, stage_locally)
         Env.backend().execute(BlockMatrixWrite(self._bmir, writer))
 
@@ -646,6 +647,7 @@ class BlockMatrix(object):
             If ``True``, major output will be written to temporary local storage
             before being copied to ``output``.
         """
+        hl.current_backend().validate_file_scheme(path)
         self.write(path, overwrite, force_row_major, stage_locally)
         return BlockMatrix.read(path, _assert_type=self._bmir._type)
 
@@ -727,6 +729,8 @@ class BlockMatrix(object):
         block_size: :obj:`int`, optional
             Block size. Default given by :meth:`.BlockMatrix.default_block_size`.
         """
+        hl.current_backend().validate_file_scheme(path)
+
         if not block_size:
             block_size = BlockMatrix.default_block_size()
 
@@ -1189,6 +1193,8 @@ class BlockMatrix(object):
         --------
         :meth:`.to_numpy`
         """
+        hl.current_backend().validate_file_scheme(uri)
+
         _check_entries_size(self.n_rows, self.n_cols)
 
         writer = BlockMatrixBinaryWriter(uri)
@@ -1330,9 +1336,7 @@ class BlockMatrix(object):
         :class:`.BlockMatrix`
             Persisted block matrix.
         """
-        id = Env.get_uid()
-        Env.backend().execute(BlockMatrixWrite(self._bmir, BlockMatrixPersistWriter(id, storage_level)))
-        return BlockMatrix(BlockMatrixRead(BlockMatrixPersistReader(id, self._bmir), _assert_type=self._bmir._type))
+        return Env.backend().persist_blockmatrix(self)
 
     def unpersist(self):
         """Unpersists this block matrix from memory/disk.
@@ -1347,10 +1351,7 @@ class BlockMatrix(object):
         :class:`.BlockMatrix`
             Unpersisted block matrix.
         """
-        if isinstance(self._bmir, BlockMatrixRead) and isinstance(self._bmir.reader, BlockMatrixPersistReader):
-            Env.backend().unpersist_block_matrix(self._bmir.reader.id)
-            return self._bmir.reader.unpersisted()
-        return self
+        return Env.backend().unpersist_blockmatrix(self)
 
     def __pos__(self):
         return self
@@ -1974,6 +1975,8 @@ class BlockMatrix(object):
             Describes which entries to export. One of:
             ``'full'``, ``'lower'``, ``'strict_lower'``, ``'upper'``, ``'strict_upper'``.
         """
+        hl.current_backend().validate_file_scheme(path_out)
+
         export_type = ExportType.default(parallel)
 
         Env.spark_backend('BlockMatrix.export')._jbackend.pyExportBlockMatrix(

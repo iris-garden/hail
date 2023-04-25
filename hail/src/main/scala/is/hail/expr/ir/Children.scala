@@ -69,6 +69,8 @@ object Children {
       Array(totalRange, numToSample, rngState)
     case StreamDistribute(child, pivots, path, _, _) =>
       Array(child, pivots, path)
+    case StreamWhiten(stream, _, _, _, _, _, _, _) =>
+      Array(stream)
     case ArrayZeros(length) =>
       Array(length)
     case MakeNDArray(data, shape, rowMajor, _) =>
@@ -81,6 +83,8 @@ object Children {
       Array(nds)
     case ArraySort(a, _, _, lessThan) =>
       Array(a, lessThan)
+    case ArrayMaximalIndependentSet(a, tieBreaker) =>
+      Array(a) ++ tieBreaker.map { case (_, _, tb) => tb }
     case ToSet(a) =>
       Array(a)
     case ToDict(a) =>
@@ -95,7 +99,7 @@ object Children {
       Array(orderedCollection, elem)
     case GroupByKey(collection) =>
       Array(collection)
-    case RNGStateLiteral(_) => none
+    case RNGStateLiteral() => none
     case RNGSplit(state, split) =>
       Array(state, split)
     case StreamLen(a) =>
@@ -140,6 +144,8 @@ object Children {
       Array(a, query)
     case StreamBufferedAggregate(streamChild, initAggs, newKey, seqOps, _, _, _) =>
       Array(streamChild, initAggs, newKey, seqOps)
+    case StreamLocalLDPrune(streamChild, r2Threshold, windowSize, maxQueueSize, nSamples) =>
+      Array(streamChild, r2Threshold, windowSize, maxQueueSize, nSamples)
     case RunAggScan(array, _, init, seq, result, _) =>
       Array(array, init, seq, result)
     case RunAgg(body, result, _) =>
@@ -215,7 +221,7 @@ object Children {
       args.toFastIndexedSeq
     case Apply(_, _, args, _, _) =>
       args.toFastIndexedSeq
-    case ApplySeeded(_, args, rngState, seed, _) =>
+    case ApplySeeded(_, args, rngState, _, _) =>
       args.toFastIndexedSeq :+ rngState
     case ApplySpecial(_, _, args, _, _) =>
       args.toFastIndexedSeq
@@ -243,7 +249,7 @@ object Children {
     case WritePartition(stream, ctx, _) => Array(stream, ctx)
     case WriteMetadata(writeAnnotations, _) => Array(writeAnnotations)
     case ReadValue(path, _, _) => Array(path)
-    case WriteValue(value, path, spec) => Array(value, path)
+    case WriteValue(value, path, _, staged) => Array(value, path) ++ staged.toArray[IR]
     case LiftMeOut(child) => Array(child)
   }
 }

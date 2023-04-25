@@ -1,20 +1,20 @@
 package is.hail.io.fs
 
-import java.io._
-import java.nio.charset._
-import java.util.zip.GZIPOutputStream
-import is.hail.{HailContext, HailFeatureFlags}
 import is.hail.backend.BroadcastValue
 import is.hail.io.compress.{BGzipInputStream, BGzipOutputStream}
 import is.hail.io.fs.FSUtil.{containsWildcard, dropTrailingSlash}
-import is.hail.utils._
 import is.hail.services._
+import is.hail.utils._
+import is.hail.{HailContext, HailFeatureFlags}
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.io.IOUtils
 import org.apache.hadoop
 
+import java.io._
 import java.nio.ByteBuffer
+import java.nio.charset._
 import java.nio.file.FileSystems
+import java.util.zip.GZIPOutputStream
 import scala.collection.mutable
 import scala.io.Source
 
@@ -34,6 +34,27 @@ class WrappedSeekableDataInputStream(is: SeekableInputStream) extends DataInputS
 
 class WrappedPositionedDataOutputStream(os: PositionedOutputStream) extends DataOutputStream(os) with Positioned {
   def getPosition: Long = os.getPosition
+}
+
+class WrappedPositionOutputStream(os: OutputStream) extends OutputStream with Positioned {
+  private[this] var count: Long = 0L
+
+  override def flush(): Unit = os.flush()
+
+  override def write(i: Int): Unit = {
+    os.write(i)
+    count += 1
+  }
+
+  override def write(bytes: Array[Byte], off: Int, len: Int): Unit = {
+    os.write(bytes, off, len)
+  }
+
+  override def close(): Unit = {
+    os.close()
+  }
+
+  def getPosition: Long = count
 }
 
 trait FileStatus {
@@ -153,6 +174,8 @@ abstract class FSSeekableInputStream extends InputStream with Seekable {
     toTransfer
   }
 
+  protected def physicalSeek(newPos: Long): Unit
+
   def seek(newPos: Long): Unit = {
     val distance = newPos - pos
     val bufferSeekPosition = bb.position() + distance
@@ -165,6 +188,7 @@ abstract class FSSeekableInputStream extends InputStream with Seekable {
       if (bb.remaining() != 0) {
         assert(false, bb.remaining().toString())
       }
+      physicalSeek(newPos)
     }
     pos = newPos
   }
@@ -172,9 +196,9 @@ abstract class FSSeekableInputStream extends InputStream with Seekable {
   def getPosition: Long = pos
 }
 
-abstract class FSPositionedOutputStream extends OutputStream with Positioned {
+abstract class FSPositionedOutputStream(val capacity: Int) extends OutputStream with Positioned {
   protected[this] var closed: Boolean = false
-  protected[this] val bb: ByteBuffer = ByteBuffer.allocate(64 * 1024)
+  protected[this] val bb: ByteBuffer = ByteBuffer.allocate(capacity)
   protected[this] var pos: Long = 0
 
    def flush(): Unit
@@ -207,27 +231,40 @@ object FS {
   def cloudSpecificCacheableFS(
     credentialsPath: String,
     flags: Option[HailFeatureFlags]
-  ): ServiceCacheableFS = retryTransientErrors {
-    using(new FileInputStream(credentialsPath)) { is =>
+  ): FS = retryTransientErrors {
+    val cloudSpecificFS = using(new FileInputStream(credentialsPath)) { is =>
       val credentialsStr = Some(IOUtils.toString(is, Charset.defaultCharset()))
-      sys.env.get("HAIL_CLOUD").get match {
-        case "gcp" =>
+      sys.env.get("HAIL_CLOUD") match {
+        case Some("gcp") =>
           val requesterPaysConfiguration = flags.flatMap { flags =>
             RequesterPaysConfiguration.fromFlags(
               flags.get("gcs_requester_pays_project"), flags.get("gcs_requester_pays_buckets")
             )
           }
           new GoogleStorageFS(credentialsStr, requesterPaysConfiguration).asCacheable()
-        case "azure" =>
+        case Some("azure") =>
           new AzureStorageFS(credentialsStr).asCacheable()
-        case cloud =>
+        case Some(cloud) =>
           throw new IllegalArgumentException(s"Bad cloud: $cloud")
+        case None =>
+          throw new IllegalArgumentException(s"HAIL_CLOUD must be set.")
       }
     }
+
+    new RouterFS(Array(cloudSpecificFS, new HadoopFS(new SerializableHadoopConfiguration(new hadoop.conf.Configuration()))))
   }
 }
 
 trait FS extends Serializable {
+
+  def validUrl(filename: String): Boolean
+
+  def openCachedNoCompression(filename: String): SeekableDataInputStream = openNoCompression(filename)
+
+  def createCachedNoCompression(filename: String): PositionedDataOutputStream = createNoCompression(filename)
+
+  def writeCached(filename: String)(writer: PositionedDataOutputStream => Unit) = writePDOS(filename)(writer)
+
   def getCodecFromExtension(extension: String, gzAsBGZ: Boolean = false): CompressionCodec = {
     extension match {
       case ".gz" =>
@@ -281,7 +318,12 @@ trait FS extends Serializable {
       ""
   }
 
-  def openNoCompression(filename: String, _debug: Boolean = false): SeekableDataInputStream
+  final def openNoCompression(filename: String): SeekableDataInputStream = openNoCompression(filename, false)
+  def openNoCompression(filename: String, _debug: Boolean): SeekableDataInputStream
+
+  def readNoCompression(filename: String): Array[Byte] = retryTransientErrors {
+    IOUtils.toByteArray(openNoCompression(filename))
+  }
 
   def createNoCompression(filename: String): PositionedDataOutputStream
 
@@ -377,6 +419,12 @@ trait FS extends Serializable {
     else
       os
   }
+
+  def write(filename: String)(writer: OutputStream => Unit) =
+    using(create(filename))(writer)
+
+  def writePDOS(filename: String)(writer: PositionedDataOutputStream => Unit) =
+    using(create(filename))(os => writer(outputStreamToPositionedDataOutputStream(os)))
 
   def getFileSize(filename: String): Long = fileStatus(filename).getLen
 
@@ -553,4 +601,3 @@ trait FS extends Serializable {
 
   def setConfiguration(config: Any): Unit
 }
-

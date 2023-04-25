@@ -7,12 +7,15 @@ import warnings
 from shlex import quote as shq
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union, cast
 
+import hailtop.batch_client.client as bc
+
 from . import backend, batch  # pylint: disable=cyclic-import
 from . import resource as _resource  # pylint: disable=cyclic-import
 from .exceptions import BatchException
 
 
 def _add_resource_to_set(resource_set, resource, include_rg=True):
+    rg: Optional[_resource.ResourceGroup]
     if isinstance(resource, _resource.ResourceGroup):
         rg = resource
         if include_rg:
@@ -78,6 +81,7 @@ class Job:
         self._machine_type: Optional[str] = None
         self._timeout: Optional[Union[int, float]] = None
         self._cloudfuse: List[Tuple[str, str, bool]] = []
+        self._always_copy_output: bool = False
         self._env: Dict[str, str] = {}
         self._wrapper_code: List[str] = []
         self._user_code: List[str] = []
@@ -94,6 +98,8 @@ class Job:
         self._mentioned: Set[_resource.Resource] = set()  # resources used in the command
         self._valid: Set[_resource.Resource] = set()  # resources declared in the appropriate place
         self._dependencies: Set[Job] = set()
+        self._submitted: bool = False
+        self._client_job: Optional[bc.Job] = None
 
         def safe_str(s):
             new_s = []
@@ -107,7 +113,12 @@ class Job:
         self._dirname = f'{safe_str(name)}-{self._token}' if name else self._token
 
     def _get_resource(self, item: str) -> '_resource.Resource':
-        raise NotImplementedError
+        if item not in self._resources:
+            r = self._batch._new_job_resource_file(self, value=item)
+            self._resources[item] = r
+            self._resources_inverse[r] = item
+
+        return self._resources[item]
 
     def __getitem__(self, item: str) -> '_resource.Resource':
         return self._get_resource(item)
@@ -307,10 +318,6 @@ class Job:
         """
         Set the job to always run, even if dependencies fail.
 
-        Notes
-        -----
-        Can only be used with the :class:`.backend.ServiceBackend`.
-
         Warning
         -------
         Jobs set to always run are not cancellable!
@@ -332,10 +339,6 @@ class Job:
         -------
         Same job object set to always run.
         """
-
-        if not isinstance(self._batch._backend, backend.ServiceBackend):
-            raise NotImplementedError("A ServiceBackend is required to use the 'always_run' option")
-
         self._always_run = always_run
         return self
 
@@ -518,6 +521,39 @@ class Job:
         self._cloudfuse.append((bucket, mount_point, read_only))
         return self
 
+    def always_copy_output(self, always_copy_output: bool = True) -> 'Job':
+        """
+        Set the job to always copy output to cloud storage, even if the job failed.
+
+        Notes
+        -----
+        Can only be used with the :class:`.backend.ServiceBackend`.
+
+        Examples
+        --------
+
+        >>> b = Batch(backend=backend.ServiceBackend('test'))
+        >>> j = b.new_job()
+        >>> (j.always_copy_output()
+        ...   .command(f'echo "hello" > {j.ofile} && false'))
+
+        Parameters
+        ----------
+        always_copy_output:
+            If True, set job to always copy output to cloud storage regardless
+            of whether the job succeeded.
+
+        Returns
+        -------
+        Same job object set to always copy output.
+        """
+
+        if not isinstance(self._batch._backend, backend.ServiceBackend):
+            raise NotImplementedError("A ServiceBackend is required to use the 'always_copy_output' option")
+
+        self._always_copy_output = always_copy_output
+        return self
+
     async def _compile(self, local_tmpdir, remote_tmpdir, *, dry_run=False):
         raise NotImplementedError
 
@@ -548,6 +584,11 @@ class Job:
                         raise BatchException(f"undefined resource '{name}'\n"
                                              f"Hint: resources must be defined within "
                                              f"the job methods 'command' or 'declare_resource_group'")
+
+                    if self._always_run:
+                        warnings.warn('A job marked as always run has a resource file dependency on another job. If the dependent job fails, '
+                                      f'the always run job with the following command may not succeed:\n{command}')
+
                     self._dependencies.add(r._source)
                     r._source._add_internal_outputs(r)
             else:
@@ -622,14 +663,6 @@ class BashJob(Job):
                  shell: Optional[str] = None):
         super().__init__(batch, token, name=name, attributes=attributes, shell=shell)
         self._command: List[str] = []
-
-    def _get_resource(self, item: str) -> '_resource.Resource':
-        if item not in self._resources:
-            r = self._batch._new_job_resource_file(self, value=item)
-            self._resources[item] = r
-            self._resources_inverse[r] = item
-
-        return self._resources[item]
 
     def declare_resource_group(self, **mappings: Dict[str, Any]) -> 'BashJob':
         """Declare a resource group for a job.
@@ -790,15 +823,15 @@ class BashJob(Job):
 
         job_command = [cmd.strip() for cmd in self._command]
         job_command = [f'{{\n{x}\n}}' for x in job_command]
-        job_command = '\n'.join(job_command)
+        job_command_str = '\n'.join(job_command)
 
-        job_command_bytes = job_command.encode()
+        job_command_bytes = job_command_str.encode()
 
         if len(job_command_bytes) <= 10 * 1024:
-            self._wrapper_code.append(job_command)
+            self._wrapper_code.append(job_command_str)
             return False
 
-        self._user_code.append(job_command)
+        self._user_code.append(job_command_str)
 
         job_path = f'{remote_tmpdir}/{self._dirname}'
         code_path = f'{job_path}/code.sh'
@@ -867,7 +900,7 @@ class PythonJob(Job):
         self._function_calls: List[Tuple[_resource.PythonResult, int, Tuple[Any, ...], Dict[str, Any]]] = []
         self.n_results = 0
 
-    def _get_resource(self, item: str) -> '_resource.PythonResult':
+    def _get_python_resource(self, item: str) -> '_resource.PythonResult':
         if item not in self._resources:
             r = self._batch._new_python_result(self, value=item)
             self._resources[item] = r
@@ -1040,6 +1073,16 @@ class PythonJob(Job):
             if isinstance(value, Job):
                 raise BatchException('arguments to a PythonJob cannot be other job objects.')
 
+        # Some builtins like `print` do not have signatures
+        try:
+            inspect.signature(unapplied).bind(*args, **kwargs)
+        except ValueError as e:
+            # Some builtins like `print` don't have a signature that inspect can read
+            if 'no signature found for builtin' not in e.args[0]:
+                raise e
+        except TypeError as e:
+            raise BatchException(f'Cannot call {unapplied.__name__} with the supplied arguments') from e
+
         def handle_arg(r):
             if r._source != self:
                 self._add_inputs(r)
@@ -1054,16 +1097,21 @@ class PythonJob(Job):
 
             self._mentioned.add(r)
 
-        for arg in args:
-            if isinstance(arg, _resource.Resource):
-                handle_arg(arg)
+        def handle_args(r):
+            if isinstance(r, _resource.Resource):
+                handle_arg(r)
+            elif isinstance(r, (list, tuple)):
+                for elt in r:
+                    handle_args(elt)
+            elif isinstance(r, dict):
+                for v in r.values():
+                    handle_args(v)
 
-        for value in kwargs.values():
-            if isinstance(value, _resource.Resource):
-                handle_arg(value)
+        handle_args(args)
+        handle_args(kwargs)
 
         self.n_results += 1
-        result = self._get_resource(f'result{self.n_results}')
+        result = self._get_python_resource(f'result{self.n_results}')
         handle_arg(result)
 
         unapplied_id = self._batch._register_python_function(unapplied)
@@ -1081,16 +1129,20 @@ class PythonJob(Job):
             if isinstance(arg, _resource.ResourceGroup):
                 return ('dict_path', {name: resource._get_path(local_tmpdir)
                                       for name, resource in arg._resources.items()})
+            if isinstance(arg, (list, tuple)):
+                return ('value', [prepare_argument_for_serialization(elt) for elt in arg])
+            if isinstance(arg, dict):
+                return ('value', {k: prepare_argument_for_serialization(v) for k, v in arg.items()})
             return ('value', arg)
 
         for i, (result, unapplied_id, args, kwargs) in enumerate(self._function_calls):
             func_file = self._batch._python_function_files[unapplied_id]
 
-            args = [prepare_argument_for_serialization(arg) for arg in args]
-            kwargs = {kw: prepare_argument_for_serialization(arg) for kw, arg in kwargs.items()}
+            prepared_args = prepare_argument_for_serialization(args)[1]
+            kwargs = prepare_argument_for_serialization(kwargs)[1]
 
             args_file = await self._batch._serialize_python_to_input_file(
-                os.path.dirname(result._get_path(remote_tmpdir)), "args", i, (args, kwargs), dry_run
+                os.path.dirname(result._get_path(remote_tmpdir)), "args", i, (prepared_args, kwargs), dry_run
             )
 
             json_write, str_write, repr_write = [
@@ -1112,6 +1164,10 @@ import sys
 
 def deserialize_argument(arg):
     typ, val = arg
+    if typ == 'value' and isinstance(val, dict):
+        return {{k: deserialize_argument(v) for k, v in val.items()}}
+    if typ == 'value' and isinstance(val, (list, tuple)):
+        return [deserialize_argument(elt) for elt in val]
     if typ == 'py_path':
         return dill.load(open(val, 'rb'))
     if typ in ('path', 'dict_path'):
@@ -1126,7 +1182,7 @@ with open('{result}', 'wb') as dill_out:
         with open('{args_file}', 'rb') as arg_file:
             args, kwargs = dill.load(arg_file)
             args = [deserialize_argument(arg) for arg in args]
-            kwargs = {{kw: deserialize_argument(arg) for kw, arg in kwargs.items()}}
+            kwargs = {{k: deserialize_argument(v) for k, v in kwargs.items()}}
         result = func(*args, **kwargs)
         dill.dump(result, dill_out, recurse=True)
         {json_write}
@@ -1143,10 +1199,10 @@ with open('{result}', 'wb') as dill_out:
 
             unapplied = self._batch._python_function_defs[unapplied_id]
             self._user_code.append(textwrap.dedent(inspect.getsource(unapplied)))
-            args = ', '.join([f'{arg!r}' for _, arg in args])
-            kwargs = ', '.join([f'{k}={v!r}' for k, (_, v) in kwargs.items()])
-            separator = ', ' if args and kwargs else ''
-            func_call = f'{unapplied.__name__}({args}{separator}{kwargs})'
+            args_str = ', '.join([f'{arg!r}' for _, arg in prepared_args])
+            kwargs_str = ', '.join([f'{k}={v!r}' for k, (_, v) in kwargs.items()])
+            separator = ', ' if args_str and kwargs_str else ''
+            func_call = f'{unapplied.__name__}({args_str}{separator}{kwargs_str})'
             self._user_code.append(self._interpolate_command(func_call, allow_python_results=True))
 
         return True

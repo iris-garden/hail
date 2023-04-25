@@ -5,6 +5,7 @@ import os.path
 import io
 import stat
 import asyncio
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 
@@ -15,12 +16,19 @@ from .fs import (FileStatus, FileListEntry, MultiPartCreate, AsyncFS, AsyncFSURL
 
 
 class LocalStatFileStatus(FileStatus):
-    def __init__(self, stat_result):
+    def __init__(self, stat_result: os.stat_result):
         self._stat_result = stat_result
         self._items = None
 
     async def size(self) -> int:
         return self._stat_result.st_size
+
+    def time_created(self) -> datetime.datetime:
+        raise ValueError('LocalFS does not support time created.')
+
+    def time_modified(self) -> datetime.datetime:
+        return datetime.datetime.fromtimestamp(self._stat_result.st_mtime,
+                                               tz=datetime.timezone.utc)
 
     async def __getitem__(self, key: str) -> Any:
         raise KeyError(key)
@@ -169,16 +177,26 @@ class TruncatedReadableBinaryIO(BinaryIO):
     def readlines(self, hint: int = -1):  # pylint: disable=unused-argument
         raise NotImplementedError
 
-    def seek(self, offset: int, whence: int = 0) -> int:  # pylint: disable=unused-argument
-        raise NotImplementedError
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        res = self.bio.seek(offset, whence)
+        if whence == os.SEEK_SET:
+            self.offset = offset
+        elif whence == os.SEEK_CUR:
+            self.offset += offset
+        elif whence == os.SEEK_END:
+            assert offset < 0
+            self.offset = self.limit + offset
+        else:
+            raise ValueError(f'Unsupported seek whence: {whence}')
+        return res
 
     def seekable(self) -> bool:
-        return False
+        return True
 
     def tell(self) -> int:
         return self.bio.tell()
 
-    def truncate(self, size: int = None):
+    def truncate(self, size: Optional[int] = None):
         raise NotImplementedError
 
     def writable(self) -> bool:
@@ -201,6 +219,10 @@ class LocalAsyncFS(AsyncFS):
         if not thread_pool:
             thread_pool = ThreadPoolExecutor(max_workers=max_workers)
         self._thread_pool = thread_pool
+
+    @staticmethod
+    def valid_url(url: str) -> bool:
+        return url.startswith('file://') or '://' not in url
 
     def parse_url(self, url: str) -> LocalAsyncFSURL:
         return LocalAsyncFSURL(self._get_path(url))

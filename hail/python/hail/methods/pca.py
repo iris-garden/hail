@@ -2,6 +2,7 @@ from typing import List, Tuple
 
 import hail as hl
 import hail.expr.aggregators as agg
+from hail.expr.expressions import construct_expr
 from hail.expr import (expr_float64, expr_call, check_entry_indexed,
                        matrix_table_source)
 from hail import ir
@@ -92,6 +93,10 @@ def hwe_normalized_pca(call_expr, k=10, compute_loadings=False) -> Tuple[List[fl
     (:obj:`list` of :obj:`float`, :class:`.Table`, :class:`.Table`)
         List of eigenvalues, table with column scores, table with row loadings.
     """
+    from hail.backend.service_backend import ServiceBackend
+
+    if isinstance(hl.current_backend(), ServiceBackend):
+        return _hwe_normalized_blanczos(call_expr, k, compute_loadings)
 
     return pca(hwe_normalize(call_expr),
                k,
@@ -181,6 +186,11 @@ def pca(entry_expr, k=10, compute_loadings=False) -> Tuple[List[float], Table, T
     (:obj:`list` of :obj:`float`, :class:`.Table`, :class:`.Table`)
         List of eigenvalues, table with column scores, table with row loadings.
     """
+    from hail.backend.service_backend import ServiceBackend
+
+    if isinstance(hl.current_backend(), ServiceBackend):
+        return _blanczos_pca(entry_expr, k, compute_loadings)
+
     check_entry_indexed('pca/entry_expr', entry_expr)
 
     mt = matrix_table_source('pca/entry_expr', entry_expr)
@@ -217,14 +227,44 @@ class TallSkinnyMatrix:
         self.source_table = source_table
 
 
-def _make_tsm(entry_expr, block_size):
+def _make_tsm(entry_expr, block_size, *, partition_size=None, whiten_window_size=None, whiten_block_size=64, normalize_after_whiten=False):
     mt = matrix_table_source('_make_tsm/entry_expr', entry_expr)
-    A, ht = mt_to_table_of_ndarray(entry_expr, block_size, return_checkpointed_table_also=True)
-    A = A.persist()
-    return TallSkinnyMatrix(A, A.ndarray, ht, list(mt.col_key))
+
+    if whiten_window_size is None:
+        A, ht = mt_to_table_of_ndarray(entry_expr, block_size, return_checkpointed_table_also=True)
+        return TallSkinnyMatrix(A, A.ndarray, ht, list(mt.col_key))
+    else:
+        # FIXME: don't whiten across chromosome boundaries
+        A, trailing_blocks_ht, ht = mt_to_table_of_ndarray(
+            entry_expr, block_size,
+            return_checkpointed_table_also=True,
+            partition_size=partition_size,
+            window_size=whiten_window_size)
+
+        A = A.annotate(ndarray=A.ndarray.T)
+        vec_size = hl.eval(ht.take(1, _localize=False)[0].xs.length())
+        if vec_size <= whiten_window_size:
+            raise ValueError("whiten_window_size must be smaller than number of cols")
+        joined = A.annotate(prev_window=trailing_blocks_ht[A.key].prev_window)
+
+        def whiten_map_body(part_stream):
+            stream_ir = ir.StreamWhiten(
+                part_stream._ir,
+                "ndarray",
+                "prev_window",
+                vec_size,
+                whiten_window_size,
+                block_size,
+                whiten_block_size,
+                normalize_after_whiten)
+            return construct_expr(stream_ir, part_stream.dtype)
+        whitened = joined._map_partitions(whiten_map_body)
+        whitened = whitened.annotate(ndarray=whitened.ndarray.T).persist()
+
+        return TallSkinnyMatrix(whitened, whitened.ndarray, ht, list(mt.col_key))
 
 
-def _make_tsm_from_call(call_expr, block_size, mean_center=False, hwe_normalize=False):
+def _make_tsm_from_call(call_expr, block_size, *, mean_center=False, hwe_normalize=False, partition_size=None, whiten_window_size=None, whiten_block_size=64, normalize_after_whiten=False):
     mt = matrix_table_source('_make_tsm/entry_expr', call_expr)
     mt = mt.select_entries(__gt=call_expr.n_alt_alleles())
     if mean_center or hwe_normalize:
@@ -244,14 +284,16 @@ def _make_tsm_from_call(call_expr, block_size, mean_center=False, hwe_normalize=
 
         if hwe_normalize:
             mt = mt.annotate_rows(
-                __hwe_scaled_std_dev=hl.sqrt(mt.__mean_gt * (2 - mt.__mean_gt) * n_variants / 2))
+                __hwe_scaled_std_dev=hl.sqrt(mt.__mean_gt * (2 - mt.__mean_gt) / 2))
             mt = mt.select_entries(__x=mt.__x / mt.__hwe_scaled_std_dev)
     else:
         mt = mt.select_entries(__x=mt.__gt)
 
-    A, ht = mt_to_table_of_ndarray(mt.__x, block_size, return_checkpointed_table_also=True)
-    A = A.persist()
-    return TallSkinnyMatrix(A, A.ndarray, ht, list(mt.col_key))
+    return _make_tsm(mt.__x, block_size,
+                     partition_size=partition_size,
+                     whiten_window_size=whiten_window_size,
+                     whiten_block_size=whiten_block_size,
+                     normalize_after_whiten=normalize_after_whiten)
 
 
 class KrylovFactorization:
@@ -357,7 +399,7 @@ def _reduced_svd(A: TallSkinnyMatrix, k=10, compute_U=False, iterations=2, itera
     n = A.ncols
 
     # Generate random matrix G
-    G = hl.nd.zeros((n, L)).map(lambda n: hl.rand_norm(0, 1))
+    G = hl.rand_norm(0, 1, size=(n, L))
     G = hl.nd.qr(G)[0]._persist()
 
     fact = _krylov_factorization(A, G, q, compute_U)
@@ -373,7 +415,7 @@ def _reduced_svd(A: TallSkinnyMatrix, k=10, compute_U=False, iterations=2, itera
 def _spectral_moments(A, num_moments, p=None, moment_samples=500, block_size=128):
     if not isinstance(A, TallSkinnyMatrix):
         check_entry_indexed('_spectral_moments/entry_expr', A)
-        A = _make_tsm_from_call(A, block_size)
+        A = _make_tsm(A, block_size)
 
     n = A.ncols
 
@@ -383,7 +425,7 @@ def _spectral_moments(A, num_moments, p=None, moment_samples=500, block_size=128
     # TODO: When moment_samples > n, we should just do a TSQR on A, and compute
     # the spectrum of R.
     assert moment_samples < n, '_spectral_moments: moment_samples must be smaller than num cols of A'
-    G = hl.nd.zeros((n, moment_samples)).map(lambda n: hl.if_else(hl.rand_bool(0.5), -1, 1))
+    G = hl.rand_unif(-1, 1, size=(n, moment_samples)).map(lambda x: hl.sign(x))
     Q1, R1 = hl.nd.qr(G)._persist()
     fact = _krylov_factorization(A, Q1, p, compute_U=False)
     moments_and_stdevs = hl.eval(fact.spectral_moments(num_moments, R1))
@@ -397,13 +439,16 @@ def _spectral_moments(A, num_moments, p=None, moment_samples=500, block_size=128
            num_moments=int,
            compute_loadings=bool,
            q_iterations=int,
-           oversampling_param=int,
+           oversampling_param=nullable(int),
            block_size=int,
            moment_samples=int)
-def _pca_and_moments(A, k=10, num_moments=5, compute_loadings=False, q_iterations=2, oversampling_param=2, block_size=128, moment_samples=100):
+def _pca_and_moments(A, k=10, num_moments=5, compute_loadings=False, q_iterations=10, oversampling_param=None, block_size=128, moment_samples=100):
     if not isinstance(A, TallSkinnyMatrix):
         check_entry_indexed('_spectral_moments/entry_expr', A)
-        A = _make_tsm_from_call(A, block_size)
+        A = _make_tsm(A, block_size)
+
+    if oversampling_param is None:
+        oversampling_param = k
 
     # Set Parameters
     q = q_iterations
@@ -411,7 +456,7 @@ def _pca_and_moments(A, k=10, num_moments=5, compute_loadings=False, q_iteration
     n = A.ncols
 
     # Generate random matrix G
-    G = hl.nd.zeros((n, L)).map(lambda n: hl.rand_norm(0, 1))
+    G = hl.rand_norm(0, 1, size=(n, L))
     G = hl.nd.qr(G)[0]._persist()
 
     fact = _krylov_factorization(A, G, q, compute_loadings)
@@ -421,7 +466,7 @@ def _pca_and_moments(A, k=10, num_moments=5, compute_loadings=False, q_iteration
     p = min(num_moments // 2, 10)
 
     # Generate random matrix G2 for moment estimation
-    G2 = hl.nd.zeros((n, moment_samples)).map(lambda n: hl.if_else(hl.rand_bool(0.5), -1, 1))
+    G2 = hl.rand_unif(-1, 1, size=(n, moment_samples)).map(lambda x: hl.sign(x))
     # Project out components in subspace fact.V, which we can compute exactly
     G2 = G2 - fact.V @ (fact.V.T @ G2)
     Q1, R1 = hl.nd.qr(G2)._persist()
@@ -446,7 +491,7 @@ def _pca_and_moments(A, k=10, num_moments=5, compute_loadings=False, q_iteration
         lt = lt.annotate_globals(U=U)
         idx_name = '_tmp_pca_loading_index'
         lt = lt.add_index(idx_name)
-        lt = lt.annotate(loadings=lt.U[lt[idx_name], :]._data_array()).select_globals()
+        lt = lt.annotate(loadings=hl.array(lt.U[lt[idx_name], :])).select_globals()
         lt = lt.drop(lt[idx_name])
     else:
         lt = None
@@ -458,9 +503,11 @@ def _pca_and_moments(A, k=10, num_moments=5, compute_loadings=False, q_iteration
            k=int,
            compute_loadings=bool,
            q_iterations=int,
-           oversampling_param=int,
-           block_size=int)
-def _blanczos_pca(A, k=10, compute_loadings=False, q_iterations=2, oversampling_param=2, block_size=128):
+           oversampling_param=nullable(int),
+           block_size=int,
+           compute_scores=bool,
+           transpose=bool)
+def _blanczos_pca(A, k=10, compute_loadings=False, q_iterations=10, oversampling_param=None, block_size=128, compute_scores=True, transpose=False):
     r"""Run randomized principal component analysis approximation (PCA)
     on numeric columns derived from a matrix table.
 
@@ -551,35 +598,51 @@ def _blanczos_pca(A, k=10, compute_loadings=False, q_iterations=2, oversampling_
         check_entry_indexed('_blanczos_pca/entry_expr', A)
         A = _make_tsm(A, block_size)
 
-    U, S, V = _reduced_svd(A, k, compute_loadings, q_iterations, k + oversampling_param)
+    if oversampling_param is None:
+        oversampling_param = k
 
-    scores = V * S
-    eigens = hl.eval(S * S)
+    U, S, V = _reduced_svd(A, k, compute_loadings, q_iterations, k + oversampling_param)
     info("blanczos_pca: SVD Complete. Computing conversion to PCs.")
 
-    hail_array_scores = scores._data_array()
-    cols_and_scores = hl.zip(A.source_table.index_globals().cols, hail_array_scores).map(lambda tup: tup[0].annotate(scores=tup[1]))
-    st = hl.Table.parallelize(cols_and_scores, key=A.col_key)
-
-    if compute_loadings:
-        lt = A.source_table.select()
-        lt = lt.annotate_globals(U=U)
+    def numpy_to_rows_table(X, field_name):
+        t = A.source_table.select()
+        t = t.annotate_globals(X=X)
         idx_name = '_tmp_pca_loading_index'
-        lt = lt.add_index(idx_name)
-        lt = lt.annotate(loadings=lt.U[lt[idx_name], :]._data_array()).select_globals()
-        lt = lt.drop(lt[idx_name])
-        return eigens, st, lt
+        t = t.add_index(idx_name)
+        t = t.annotate(**{field_name: hl.array(t.X[t[idx_name], :])}).select_globals()
+        t = t.drop(t[idx_name])
+        return t
+
+    def numpy_to_cols_table(X, field_name):
+        hail_array = X._data_array()
+        cols_and_X = hl.zip(A.source_table.index_globals().cols, hail_array).map(lambda tup: tup[0].annotate(**{field_name: tup[1]}))
+        t = hl.Table.parallelize(cols_and_X, key=A.col_key)
+        return t
+
+    st = None
+    lt = None
+    eigens = hl.eval(S * S)
+    if transpose:
+        if compute_loadings:
+            lt = numpy_to_cols_table(V, 'loadings')
+        if compute_scores:
+            st = numpy_to_rows_table(U * S, 'scores')
     else:
-        return eigens, st, None
+        if compute_scores:
+            st = numpy_to_cols_table(V * S, 'scores')
+        if compute_loadings:
+            lt = numpy_to_rows_table(U, 'loadings')
+
+    return eigens, st, lt
 
 
 @typecheck(call_expr=expr_call,
            k=int,
            compute_loadings=bool,
            q_iterations=int,
-           oversampling_param=int,
+           oversampling_param=nullable(int),
            block_size=int)
-def _hwe_normalized_blanczos(call_expr, k=10, compute_loadings=False, q_iterations=2, oversampling_param=2, block_size=128):
+def _hwe_normalized_blanczos(call_expr, k=10, compute_loadings=False, q_iterations=10, oversampling_param=None, block_size=128):
     r"""Run randomized principal component analysis approximation (PCA) on the
     Hardy-Weinberg-normalized genotype call matrix.
 

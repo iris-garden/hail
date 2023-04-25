@@ -96,6 +96,9 @@ object InferType {
         assert(lessThan.typ == TBoolean)
         val et = tcoerce[TStream](a.typ).elementType
         TArray(et)
+      case ArrayMaximalIndependentSet(edges, _) =>
+        val et = tcoerce[TArray](edges.typ).elementType.asInstanceOf[TBaseStruct].types.head
+        TArray(et)
       case ToSet(a) =>
         val et = tcoerce[TStream](a.typ).elementType
         TSet(et)
@@ -111,7 +114,7 @@ object InferType {
       case ToStream(a, _) =>
         val elt = tcoerce[TIterable](a.typ).elementType
         TStream(elt)
-      case RNGStateLiteral(_) =>
+      case RNGStateLiteral() =>
         TRNGState
       case RNGSplit(_, _) =>
         TRNGState
@@ -150,6 +153,8 @@ object InferType {
       case StreamDistribute(child, pivots, pathPrefix, _, _) =>
         val keyType = pivots.typ.asInstanceOf[TContainer].elementType
         TArray(TStruct(("interval", TInterval(keyType)), ("fileName", TString), ("numElements", TInt32), ("numBytes", TInt64)))
+      case StreamWhiten(stream, _, _, _, _, _, _, _) =>
+        stream.typ
       case StreamScan(a, zero, accumName, valueName, body) =>
         assert(body.typ == zero.typ)
         TStream(zero.typ)
@@ -157,6 +162,13 @@ object InferType {
         query.typ
       case StreamAggScan(_, _, query) =>
         TStream(query.typ)
+      case StreamLocalLDPrune(streamChild, _, _, _, _) =>
+        val childType = tcoerce[TStruct](tcoerce[TStream](streamChild.typ).elementType)
+        TStream(TStruct(
+          "locus" -> childType.fieldType("locus"),
+          "alleles" -> childType.fieldType("alleles"),
+          "mean" -> TFloat64,
+          "centered_length_rec" -> TFloat64))
       case RunAgg(body, result, _) =>
         result.typ
       case RunAggScan(_, _, _, _, result, _) =>
@@ -274,7 +286,7 @@ object InferType {
       case WritePartition(value, writeCtx, writer) => writer.returnType
       case _: WriteMetadata => TVoid
       case ReadValue(_, _, typ) => typ
-      case WriteValue(value, path, spec) => TString
+      case _: WriteValue => TString
       case LiftMeOut(child) => child.typ
     }
   }

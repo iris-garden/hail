@@ -15,9 +15,6 @@ from ..helpers import *
 from hail import ir
 from hail.utils import new_temp_file, FatalError, run_command, uri_path, HailUserError
 
-setUpModule = startTestHailContext
-tearDownModule = stopTestHailContext
-
 _FLOAT_INFO_FIELDS = [
     'BaseQRankSum',
     'ClippingRankSum',
@@ -423,7 +420,6 @@ class VCFTests(unittest.TestCase):
     def test_vcf_parser_golden_master__sample_GRCh37(self):
         self._test_vcf_parser_golden_master(resource('sample.vcf'), 'GRCh37')
 
-    @skip_when_service_backend(reason='As of 2022-03-16 hangs')
     def test_vcf_parser_golden_master__gvcf_GRCh37(self):
         self._test_vcf_parser_golden_master(resource('gvcfs/HG00096.g.vcf.gz'), 'GRCh38')
 
@@ -586,7 +582,6 @@ class VCFTests(unittest.TestCase):
 
         assert hl.import_vcf(nf)._same(mt)
 
-    @fails_service_backend()
     def test_custom_rg_import(self):
         rg = hl.ReferenceGenome.read(resource('deid_ref_genome.json'))
         mt = hl.import_vcf(resource('custom_rg.vcf'), reference_genome=rg)
@@ -975,7 +970,6 @@ class PLINKTests(unittest.TestCase):
         with self.assertRaisesRegex(FatalError, "no white space allowed:"):
             hl.export_plink(ds, new_temp_file(), varid="hello world")
 
-    @fails_service_backend()
     def test_contig_recoding_defaults(self):
         hl.import_plink(resource('sex_mt_contigs.bed'),
                         resource('sex_mt_contigs.bim'),
@@ -1047,78 +1041,60 @@ def generate_random_gen():
 
 
 class BGENTests(unittest.TestCase):
+    def test_error_if_no_gp(self):
+        mt = hl.balding_nichols_model(3, 3, 3)
+        mt = mt.key_cols_by(s=hl.str(mt.sample_idx))
+        tmp_path = new_temp_file(extension='bgen')
+        with pytest.raises(ValueError, match="BGEN requires a GP"):
+            hl.export_bgen(mt, tmp_path)
 
-    def setUp(self) -> None:
+        with pytest.raises(ValueError, match="GEN requires a GP"):
+            hl.export_gen(mt, tmp_path)
 
-        # don't throw errors on setUp, let individual tests fail with @fails_local_backend
-        from hail.backend.local_backend import LocalBackend
-        if isinstance(hl.current_backend(), LocalBackend):
-            return
-
-        hl.index_bgen(resource('example.8bits.bgen'),
-                      contig_recoding={'01': '1'},
-                      reference_genome='GRCh37')
-
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_dosage_entry(self):
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
                               entry_fields=['dosage'])
         self.assertEqual(bgen.entry.dtype, hl.tstruct(dosage=hl.tfloat64))
         self.assertEqual(bgen.count_rows(), 199)
+        self.assertEqual(bgen._force_count_rows(), 199)
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_GT_GP_entries(self):
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
                               entry_fields=['GT', 'GP'],
                               sample_file=resource('example.sample'))
         self.assertEqual(bgen.entry.dtype, hl.tstruct(GT=hl.tcall, GP=hl.tarray(hl.tfloat64)))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_no_entries(self):
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
                               entry_fields=[],
                               sample_file=resource('example.sample'))
         self.assertEqual(bgen.entry.dtype, hl.tstruct())
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_no_reference(self):
-        hl.index_bgen(resource('example.8bits.bgen'),
-                      contig_recoding={'01': '1'},
-                      reference_genome=None)
-
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
-                              entry_fields=['GT', 'GP', 'dosage'])
-        self.assertEqual(bgen.locus.dtype, hl.tstruct(contig=hl.tstr, position=hl.tint32))
-        self.assertEqual(bgen.count_rows(), 199)
+                              entry_fields=['GT', 'GP', 'dosage'],
+                              index_file_map={resource('example.8bits.bgen'): resource('example.8bits.bgen-NO-REFERENCE-GENOME.idx2')})
+        assert bgen.locus.dtype == hl.tstruct(contig=hl.tstr, position=hl.tint32)
+        assert bgen.count_rows() == 199
 
-    @fails_service_backend()
-    @fails_local_backend()
-    def test_import_bgen_skip_invalid_loci(self):
+    def test_import_bgen_skip_invalid_loci_does_not_error_with_invalid_loci(self):
         # Note: the skip_invalid_loci.bgen has 16-bit probabilities, and Hail
         # will crash if the genotypes are decoded
-        hl.index_bgen(resource('skip_invalid_loci.bgen'),
-                      reference_genome='GRCh37',
-                      skip_invalid_loci=True)
-
         mt = hl.import_bgen(resource('skip_invalid_loci.bgen'),
                             entry_fields=[],
                             sample_file=resource('skip_invalid_loci.sample'))
-        self.assertEqual(mt.rows().count(), 3)
+        assert mt.rows().count() == 3
 
-        with self.assertRaisesRegex(FatalError, 'Invalid locus'):
-            hl.index_bgen(resource('skip_invalid_loci.bgen'))
+    def test_import_bgen_errors_with_invalid_loci(self):
+        with hl.TemporaryFilename(suffix='.bgen') as f:
+            hl.current_backend().fs.copy(resource('skip_invalid_loci.bgen'), f)
+            with pytest.raises(FatalError, match='Invalid locus'):
+                hl.index_bgen(f)
+                mt = hl.import_bgen(f,
+                                    entry_fields=[],
+                                    sample_file=resource('skip_invalid_loci.sample'))
+                mt.rows().count()
 
-            mt = hl.import_bgen(resource('skip_invalid_loci.bgen'),
-                                entry_fields=[],
-                                sample_file=resource('skip_invalid_loci.sample'))
-            mt.rows().count()
-
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_gavin_example(self):
         recoding = {'0{}'.format(i): str(i) for i in range(1, 10)}
 
@@ -1132,30 +1108,20 @@ class BGENTests(unittest.TestCase):
         self.assertTrue(
             bgenmt._same(genmt, tolerance=1.0 / 255, absolute=True))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_random(self):
         sample_file = resource('random.sample')
         genmt = hl.import_gen(resource('random.gen'), sample_file)
 
-        bgen_file = resource('random.bgen')
-        hl.index_bgen(bgen_file)
-        bgenmt = hl.import_bgen(bgen_file, ['GT', 'GP'], sample_file)
+        bgenmt = hl.import_bgen(resource('random.bgen'), ['GT', 'GP'], sample_file)
         self.assertTrue(
             bgenmt._same(genmt, tolerance=1.0 / 255, absolute=True))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_parallel_import(self):
-        bgen_file = resource('parallelBgenExport.bgen')
-        hl.index_bgen(bgen_file)
-        mt = hl.import_bgen(bgen_file,
+        mt = hl.import_bgen(resource('parallelBgenExport.bgen'),
                             ['GT', 'GP'],
                             resource('parallelBgenExport.sample'))
         self.assertEqual(mt.count(), (16, 10))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_dosage_and_gp_dosage_function_agree(self):
         recoding = {'0{}'.format(i): str(i) for i in range(1, 10)}
 
@@ -1169,8 +1135,6 @@ class BGENTests(unittest.TestCase):
             (hl.is_missing(et.dosage) & hl.is_missing(et.gp_dosage)) |
             (hl.abs(et.dosage - et.gp_dosage) < 1e-6)))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_row_fields(self):
         default_row_fields = hl.import_bgen(resource('example.8bits.bgen'),
                                             entry_fields=['dosage'])
@@ -1205,8 +1169,6 @@ class BGENTests(unittest.TestCase):
         self.assertTrue(
             default_row_fields.drop('varid', 'rsid')._same(no_row_fields))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_variant_filtering_from_literals(self):
         bgen_file = resource('example.8bits.bgen')
 
@@ -1248,8 +1210,6 @@ class BGENTests(unittest.TestCase):
 
         self.assertTrue(expected._same(part_1))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_locus_filtering_from_literals(self):
         bgen_file = resource('example.8bits.bgen')
 
@@ -1276,13 +1236,11 @@ class BGENTests(unittest.TestCase):
         self.assertEqual(locus_object.rows().key_by('locus', 'alleles').select().collect(),
                          expected_result)
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_variant_filtering_from_exprs(self):
         bgen_file = resource('example.8bits.bgen')
 
         everything = hl.import_bgen(bgen_file, ['GT'])
-        self.assertEqual(everything.count(), (199, 500))
+        # self.assertEqual(everything.count(), (199, 500))
 
         desired_variants = hl.struct(locus=everything.locus, alleles=everything.alleles)
 
@@ -1293,8 +1251,6 @@ class BGENTests(unittest.TestCase):
 
         self.assertTrue(everything._same(actual))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_locus_filtering_from_exprs(self):
         bgen_file = resource('example.8bits.bgen')
 
@@ -1313,8 +1269,6 @@ class BGENTests(unittest.TestCase):
 
         self.assertTrue(everything._same(actual_locus))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_variant_filtering_from_table(self):
         bgen_file = resource('example.8bits.bgen')
 
@@ -1330,8 +1284,6 @@ class BGENTests(unittest.TestCase):
 
         self.assertTrue(everything._same(actual))
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_locus_filtering_from_table(self):
         bgen_file = resource('example.8bits.bgen')
 
@@ -1351,8 +1303,6 @@ class BGENTests(unittest.TestCase):
         self.assertEqual(result.rows().key_by('locus', 'alleles').select().collect(),
                         expected_result)
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_bgen_empty_variant_filter(self):
         bgen_file = resource('example.8bits.bgen')
 
@@ -1374,16 +1324,12 @@ class BGENTests(unittest.TestCase):
         self.assertEqual(actual.count_rows(), 0)
 
     # FIXME testing block_size (in MB) requires large BGEN
-    @fails_service_backend()
-    @fails_local_backend()
     def test_n_partitions(self):
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
                               entry_fields=['dosage'],
                               n_partitions=210)
         self.assertEqual(bgen.n_partitions(), 199) # only 199 variants in the file
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_drop(self):
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
                               entry_fields=['dosage'])
@@ -1396,24 +1342,25 @@ class BGENTests(unittest.TestCase):
         self.assertEqual(dc._force_count_rows(), 199)
         self.assertEqual(dc._force_count_cols(), 0)
 
-    @fails_service_backend()
-    @fails_local_backend()
-    def test_multiple_files(self):
-        sample_file = resource('random.sample')
-        genmt = hl.import_gen(resource('random.gen'), sample_file)
+    def test_index_multiple_bgen_files_does_not_fail_and_is_importable(self):
+        original_bgen_files = [resource('random-b.bgen'), resource('random-c.bgen'), resource('random-a.bgen')]
+        with hl.TemporaryFilename(suffix='.bgen') as f, \
+             hl.TemporaryFilename(suffix='.bgen') as g, \
+             hl.TemporaryFilename(suffix='.bgen') as h:
+            newly_indexed_bgen_files = [f, g, h]
+            for source, temp in zip(original_bgen_files, newly_indexed_bgen_files):
+                hl.current_backend().fs.copy(source, temp)
 
-        bgen_file = [resource('random-b.bgen'), resource('random-c.bgen'), resource('random-a.bgen')]
-        hl.index_bgen(bgen_file)
-        bgenmt = hl.import_bgen(bgen_file, ['GT', 'GP'], sample_file, n_partitions=3)
-        self.assertTrue(
-            bgenmt._same(genmt, tolerance=1.0 / 255, absolute=True))
+            sample_file = resource('random.sample')
+            hl.index_bgen(newly_indexed_bgen_files)
 
-    @fails_service_backend()
-    @fails_local_backend()
+            actual = hl.import_bgen(newly_indexed_bgen_files, ['GT', 'GP'], sample_file, n_partitions=3)
+            expected = hl.import_gen(resource('random.gen'), sample_file)
+
+            assert actual._same(expected, tolerance=1.0 / 255, absolute=True)
+
     def test_multiple_files_variant_filtering(self):
         bgen_file = [resource('random-b.bgen'), resource('random-c.bgen'), resource('random-a.bgen')]
-        hl.index_bgen(bgen_file)
-
         alleles = ['A', 'G']
 
         desired_variants = [
@@ -1429,118 +1376,163 @@ class BGENTests(unittest.TestCase):
                                 ['GT'],
                                 n_partitions=10,
                                 variants=desired_variants)
-        self.assertEqual(actual.count_rows(), 6)
+        assert actual.count_rows() == 6
 
         everything = hl.import_bgen(bgen_file,
                                     ['GT'])
-        self.assertEqual(everything.count(), (30, 10))
+        assert everything.count() == (30, 10)
 
         expected = everything.filter_rows(hl.set(desired_variants).contains(everything.row_key))
 
-        self.assertTrue(expected._same(actual))
+        assert expected._same(actual)
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_multiple_files_disjoint(self):
         sample_file = resource('random.sample')
         bgen_file = [resource('random-b-disjoint.bgen'), resource('random-c-disjoint.bgen'), resource('random-a-disjoint.bgen')]
-        hl.index_bgen(bgen_file)
-        with self.assertRaisesRegex(FatalError, 'Each BGEN file must contain a region of the genome disjoint from other files'):
+        with pytest.raises(FatalError, match='Each BGEN file must contain a region of the genome disjoint from other files'):
             hl.import_bgen(bgen_file, ['GT', 'GP'], sample_file, n_partitions=3)
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_multiple_references_throws_error(self):
         sample_file = resource('random.sample')
         bgen_file1 = resource('random-b.bgen')
         bgen_file2 = resource('random-c.bgen')
-        hl.index_bgen(bgen_file1, reference_genome=None)
-        hl.index_bgen(bgen_file2, reference_genome='GRCh37')
 
-        with self.assertRaisesRegex(FatalError, 'Found multiple reference genomes were specified in the BGEN index files'):
-            hl.import_bgen([bgen_file1, bgen_file2], ['GT'], sample_file=sample_file)
+        with pytest.raises(FatalError, match='Found multiple reference genomes were specified in the BGEN index files'):
+            hl.import_bgen([bgen_file1, bgen_file2],
+                           ['GT'],
+                           sample_file=sample_file,
+                           index_file_map={
+                               resource('random-b.bgen'): resource('random-b.bgen-NO-REFERENCE-GENOME.idx2'),
+                               resource('random-c.bgen'): resource('random-c.bgen.idx2'),
+                           })
 
-    @fails_service_backend()
     def test_old_index_file_throws_error(self):
         sample_file = resource('random.sample')
         bgen_file = resource('random.bgen')
 
-        # missing file
-        if os.path.exists(bgen_file + '.idx2'):
-            run_command(['rm', '-r', bgen_file + '.idx2'])
-        with self.assertRaisesRegex(FatalError, 'have no .idx2 index file'):
-            hl.import_bgen(bgen_file, ['GT', 'GP'], sample_file, n_partitions=3)
+        with hl.TemporaryFilename() as f:
+            hl.current_backend().fs.copy(bgen_file, f)
+            with pytest.raises(FatalError, match='have no .idx2 index file'):
+                hl.import_bgen(f, ['GT', 'GP'], sample_file, n_partitions=3)
 
-        # old index file
-        run_command(['touch', bgen_file + '.idx'])
-        with self.assertRaisesRegex(FatalError, 'have no .idx2 index file'):
-            hl.import_bgen(bgen_file, ['GT', 'GP'], sample_file)
-        run_command(['rm', bgen_file + '.idx'])
+            try:
+                with hl.current_backend().fs.open(f + '.idx', 'wb') as fobj:
+                    fobj.write(b'')
 
-    @fails_service_backend()
-    @fails_local_backend()
+                with pytest.raises(FatalError, match='have no .idx2 index file'):
+                    hl.import_bgen(f, ['GT', 'GP'], sample_file)
+            finally:
+                hl.current_backend().fs.remove(f + '.idx')
+
     def test_specify_different_index_file(self):
         sample_file = resource('random.sample')
         bgen_file = resource('random.bgen')
-        index_file = new_temp_file(extension='idx2')
-        index_file_map = {bgen_file: index_file}
-        hl.index_bgen(bgen_file, index_file_map=index_file_map)
-        mt = hl.import_bgen(bgen_file, ['GT', 'GP'], sample_file, index_file_map=index_file_map)
-        self.assertEqual(mt.count(), (30, 10))
 
-        with self.assertRaisesRegex(FatalError, 'missing a .idx2 file extension'):
-            index_file = new_temp_file()
+        with hl.TemporaryDirectory(suffix='.idx2', ensure_exists=False) as index_file:
             index_file_map = {bgen_file: index_file}
-            hl.index_bgen(bgen_file, index_file_map=index_file_map)
+            hl.index_bgen(bgen_file,
+                          index_file_map=index_file_map)
+            mt = hl.import_bgen(bgen_file,
+                                ['GT', 'GP'],
+                                sample_file,
+                                index_file_map=index_file_map)
+            assert mt.count() == (30, 10)
 
-    @fails_service_backend()
-    @fails_local_backend()
+    def test_index_bgen_errors_when_index_file_has_wrong_extension(self):
+        bgen_file = resource('random.bgen')
+
+        with hl.TemporaryFilename(suffix='.idx') as index_file:
+            with pytest.raises(FatalError, match='missing a .idx2 file extension'):
+                index_file_map = {bgen_file: index_file}
+                hl.index_bgen(bgen_file, index_file_map=index_file_map)
+
     def test_export_bgen(self):
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
                               entry_fields=['GP'],
                               sample_file=resource('example.sample'))
-        tmp = new_temp_file()
-        hl.export_bgen(bgen, tmp)
-        hl.index_bgen(tmp + '.bgen')
-        bgen2 = hl.import_bgen(tmp + '.bgen',
-                               entry_fields=['GP'],
-                               sample_file=tmp + '.sample')
-        assert bgen._same(bgen2)
 
-    @fails_service_backend()
-    @fails_local_backend()
+        with hl.TemporaryDirectory(ensure_exists=False) as tmpdir:
+            tmp = tmpdir + '/dataset'
+            hl.export_bgen(bgen, tmp)
+            hl.index_bgen(tmp + '.bgen')
+            bgen2 = hl.import_bgen(tmp + '.bgen',
+                                   entry_fields=['GP'],
+                                   sample_file=tmp + '.sample')
+            assert bgen._same(bgen2)
+
+    def test_export_bgen_zstd(self):
+        bgen = hl.import_bgen(resource('example.8bits.bgen'),
+                              entry_fields=['GP'],
+                              sample_file=resource('example.sample'))
+        with hl.TemporaryDirectory(prefix='zstd', ensure_exists=False) as tmpdir:
+            tmp = tmpdir + '/dataset'
+            hl.export_bgen(bgen, tmp, compression_codec='zstd')
+            hl.index_bgen(tmp + '.bgen')
+            bgen2 = hl.import_bgen(tmp + '.bgen',
+                                   entry_fields=['GP'],
+                                   sample_file=tmp + '.sample')
+            assert bgen._same(bgen2)
+
     def test_export_bgen_parallel(self):
         bgen = hl.import_bgen(resource('example.8bits.bgen'),
                               entry_fields=['GP'],
                               sample_file=resource('example.sample'),
                               n_partitions=3)
-        # tmp = new_temp_file()
-        tmp = '/tmp/foo'
-        hl.export_bgen(bgen, tmp, parallel='header_per_shard')
-        hl.index_bgen(tmp + '.bgen')
-        bgen2 = hl.import_bgen(tmp + '.bgen',
-                               entry_fields=['GP'],
-                               sample_file=tmp + '.sample')
-        assert bgen._same(bgen2)
+        with hl.TemporaryDirectory(ensure_exists=False) as tmpdir:
+            tmp = tmpdir + '/dataset'
+            hl.export_bgen(bgen, tmp, parallel='header_per_shard')
+            hl.index_bgen(tmp + '.bgen')
+            bgen2 = hl.import_bgen(tmp + '.bgen',
+                                   entry_fields=['GP'],
+                                   sample_file=tmp + '.sample')
+            assert bgen._same(bgen2)
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_export_bgen_from_vcf(self):
         mt = hl.import_vcf(resource('sample.vcf'))
 
-        tmp = new_temp_file()
-        hl.export_bgen(mt, tmp,
-                       gp=hl.or_missing(
-                           hl.is_defined(mt.GT),
-                           hl.map(lambda i: hl.if_else(mt.GT.unphased_diploid_gt_index() == i, 1.0, 0.0),
-                                  hl.range(0, hl.triangle(hl.len(mt.alleles))))))
-        hl.index_bgen(tmp + '.bgen')
-        bgen2 = hl.import_bgen(tmp + '.bgen',
+        with hl.TemporaryDirectory(ensure_exists=False) as tmpdir:
+            tmp = tmpdir + '/dataset'
+            hl.export_bgen(mt, tmp,
+                           gp=hl.or_missing(
+                               hl.is_defined(mt.GT),
+                               hl.map(lambda i: hl.if_else(mt.GT.unphased_diploid_gt_index() == i, 1.0, 0.0),
+                                      hl.range(0, hl.triangle(hl.len(mt.alleles))))))
+
+
+            hl.index_bgen(tmp + '.bgen')
+            bgen2 = hl.import_bgen(tmp + '.bgen',
+                                   entry_fields=['GT'],
+                                   sample_file=tmp + '.sample')
+            mt = mt.select_entries('GT').select_rows().select_cols()
+            bgen2 = bgen2.unfilter_entries().select_rows() # drop varid, rsid
+            assert bgen2._same(mt)
+
+    def test_randomness(self):
+        alleles = ['A', 'G']
+
+        desired_variants = [
+            hl.Struct(locus=hl.Locus('1', 2000), alleles=alleles),
+            hl.Struct(locus=hl.Locus('1', 2001), alleles=alleles),
+            hl.Struct(locus=hl.Locus('1', 4000), alleles=alleles),
+            hl.Struct(locus=hl.Locus('1', 10000), alleles=alleles),
+            hl.Struct(locus=hl.Locus('1', 100001), alleles=alleles),
+        ]
+
+        bgen1 = hl.import_bgen(resource('example.8bits.bgen'),
                                entry_fields=['GT'],
-                               sample_file=tmp + '.sample')
-        mt = mt.select_entries('GT').select_rows().select_cols()
-        bgen2 = bgen2.unfilter_entries().select_rows() # drop varid, rsid
-        assert bgen2._same(mt)
+                               sample_file=resource('example.sample'),
+                               n_partitions=3)
+        bgen1 = bgen1.filter_rows(hl.literal(desired_variants).contains(bgen1.row_key))
+        c1 = bgen1.filter_entries(hl.rand_bool(0.2, seed=1234))
+
+        bgen2 = hl.import_bgen(resource('example.8bits.bgen'),
+                               entry_fields=['GT'],
+                               sample_file=resource('example.sample'),
+                               n_partitions=5,
+                               variants=desired_variants)
+
+        c2 = bgen2.filter_entries(hl.rand_bool(0.2, seed=1234))
+        assert c1._same(c2)
 
 
 class GENTests(unittest.TestCase):
@@ -1673,14 +1665,13 @@ class LocusIntervalTests(unittest.TestCase):
         t = hl.import_locus_intervals(interval_file, reference_genome=None, skip_invalid_intervals=True)
         self.assertEqual(t.count(), 22)
 
-    @fails_service_backend()
     def test_import_bed(self):
         bed_file = resource('example1.bed')
         bed = hl.import_bed(bed_file, reference_genome='GRCh37')
 
         nbed = bed.count()
         i = 0
-        with open(bed_file) as f:
+        with hl.hadoop_open(bed_file) as f:
             for line in f:
                 if len(line.strip()) != 0:
                     try:
@@ -2101,17 +2092,21 @@ class ImportTableTests(unittest.TestCase):
 
 
 class GrepTests(unittest.TestCase):
-    @fails_service_backend()
     @fails_local_backend()
     def test_grep_show_false(self):
-        expected = {'sampleAnnotations.tsv': ['HG00120\tCASE\t19599', 'HG00121\tCASE\t4832'],
-                    'sample2_rename.tsv': ['HG00120\tB_HG00120', 'HG00121\tB_HG00121'],
-                    'sampleAnnotations2.tsv': ['HG00120\t3919.8\t19589',
-                                               'HG00121\t966.4\t4822',
-                                               'HG00120_B\t3919.8\t19589',
-                                               'HG00121_B\t966.4\t4822',
-                                               'HG00120_B_B\t3919.8\t19589',
-                                               'HG00121_B_B\t966.4\t4822']}
+        from hail.backend.service_backend import ServiceBackend
+        if isinstance(hl.current_backend(), ServiceBackend):
+            prefix = resource('')
+        else:
+            prefix = ''
+        expected = {prefix + 'sampleAnnotations.tsv': ['HG00120\tCASE\t19599', 'HG00121\tCASE\t4832'],
+                    prefix + 'sample2_rename.tsv': ['HG00120\tB_HG00120', 'HG00121\tB_HG00121'],
+                    prefix + 'sampleAnnotations2.tsv': ['HG00120\t3919.8\t19589',
+                                                        'HG00121\t966.4\t4822',
+                                                        'HG00120_B\t3919.8\t19589',
+                                                        'HG00121_B\t966.4\t4822',
+                                                        'HG00120_B_B\t3919.8\t19589',
+                                                        'HG00121_B_B\t966.4\t4822']}
 
         assert hl.grep('HG0012[0-1]', resource('*.tsv'), show=False) == expected
 

@@ -1,6 +1,6 @@
 import os
 from typing import (Tuple, Any, Set, Optional, MutableMapping, Dict, AsyncIterator, cast, Type,
-                    List, Coroutine)
+                    List, Coroutine, Union)
 from types import TracebackType
 from multidict import CIMultiDictProxy  # pylint: disable=unused-import
 import sys
@@ -8,6 +8,8 @@ import logging
 import asyncio
 import urllib.parse
 import aiohttp
+import datetime
+from hailtop import timex
 from hailtop.utils import (
     secret_alnum_string, OnlineBoundedGather2,
     TransientError, retry_transient_errors)
@@ -21,6 +23,9 @@ from ..session import GoogleSession
 from ..credentials import GoogleCredentials
 
 log = logging.getLogger(__name__)
+
+
+GCSRequesterPaysConfiguration = Union[str, Tuple[str, List[str]]]
 
 
 class PageIterator:
@@ -213,13 +218,14 @@ class ResumableInsertObjectStream(WritableStream):
                                   raise_for_status=False,
                                   retry=False),
                 closable=True) as put_task:
-            for chunk in self._write_buffer.chunks(n):
-                async with _TaskManager(it.feed(chunk)) as feed_task:
-                    done, _ = await asyncio.wait([put_task, feed_task], return_when=asyncio.FIRST_COMPLETED)
-                    if feed_task not in done:
-                        msg = 'resumable upload chunk PUT request finished before writing data'
-                        log.warning(msg)
-                        raise TransientError(msg)
+            with self._write_buffer.chunks(n) as chunks:
+                for chunk in chunks:
+                    async with _TaskManager(it.feed(chunk)) as feed_task:
+                        done, _ = await asyncio.wait([put_task, feed_task], return_when=asyncio.FIRST_COMPLETED)
+                        if feed_task not in done:
+                            msg = 'resumable upload chunk PUT request finished before writing data'
+                            log.warning(msg)
+                            raise TransientError(msg)
 
             await it.stop()
 
@@ -297,11 +303,13 @@ class GetObjectStream(ReadableStream):
 
 
 class GoogleStorageClient(GoogleBaseClient):
-    def __init__(self, **kwargs):
+    def __init__(self, gcs_requester_pays_configuration: Optional[GCSRequesterPaysConfiguration] = None,
+                 **kwargs):
         if 'timeout' not in kwargs and 'http_session' not in kwargs:
             # Around May 2022, GCS started timing out a lot with our default 5s timeout
             kwargs['timeout'] = aiohttp.ClientTimeout(total=20)
         super().__init__('https://storage.googleapis.com/storage/v1', **kwargs)
+        self._gcs_requester_pays_configuration = gcs_requester_pays_configuration
 
     # docs:
     # https://cloud.google.com/storage/docs/json_api/v1
@@ -317,6 +325,7 @@ class GoogleStorageClient(GoogleBaseClient):
             kwargs['params'] = params
         assert 'name' not in params
         params['name'] = name
+        self._update_params_with_user_project(kwargs, bucket)
 
         assert 'data' not in params
 
@@ -355,6 +364,7 @@ class GoogleStorageClient(GoogleBaseClient):
             kwargs['params'] = params
         assert 'alt' not in params
         params['alt'] = 'media'
+        self._update_params_with_user_project(kwargs, bucket)
 
         try:
             resp = await self._session.get(
@@ -369,15 +379,17 @@ class GoogleStorageClient(GoogleBaseClient):
 
     async def get_object_metadata(self, bucket: str, name: str, **kwargs) -> Dict[str, str]:
         assert name
-        params = kwargs.get('params')
-        assert not params or 'alt' not in params
+        assert 'params' not in kwargs or 'alt' not in kwargs['params']
+        self._update_params_with_user_project(kwargs, bucket)
         return cast(Dict[str, str], await self.get(f'/b/{bucket}/o/{urllib.parse.quote(name, safe="")}', **kwargs))
 
     async def delete_object(self, bucket: str, name: str, **kwargs) -> None:
         assert name
+        self._update_params_with_user_project(kwargs, bucket)
         await self.delete(f'/b/{bucket}/o/{urllib.parse.quote(name, safe="")}', **kwargs)
 
     async def list_objects(self, bucket: str, **kwargs) -> PageIterator:
+        self._update_params_with_user_project(kwargs, bucket)
         return PageIterator(self, f'/b/{bucket}/o', kwargs)
 
     async def compose(self, bucket: str, names: List[str], destination: str, **kwargs) -> None:
@@ -392,7 +404,20 @@ class GoogleStorageClient(GoogleBaseClient):
         kwargs['json'] = {
             'sourceObjects': [{'name': name} for name in names]
         }
+        self._update_params_with_user_project(kwargs, bucket)
         await self.post(f'/b/{bucket}/o/{urllib.parse.quote(destination, safe="")}/compose', **kwargs)
+
+    def _update_params_with_user_project(self, request_kwargs, bucket):
+        if 'params' not in request_kwargs:
+            request_kwargs['params'] = {}
+        params = request_kwargs['params']
+        config = self._gcs_requester_pays_configuration
+        if isinstance(config, str):
+            params.update({'userProject': config})
+        elif isinstance(config, tuple):
+            project, buckets = config
+            if bucket in buckets:
+                params.update({'userProject': project})
 
 
 class GetObjectFileStatus(FileStatus):
@@ -401,6 +426,12 @@ class GetObjectFileStatus(FileStatus):
 
     async def size(self) -> int:
         return int(self._items['size'])
+
+    def time_created(self) -> datetime.datetime:
+        return timex.parse_rfc3339(self._items['timeCreated'])
+
+    def time_modified(self) -> datetime.datetime:
+        return timex.parse_rfc3339(self._items['updated'])
 
     async def __getitem__(self, key: str) -> str:
         return self._items[key]
@@ -516,8 +547,8 @@ class GoogleStorageMultiPartCreate(MultiPartCreate):
 
                     await self._compose(chunk_names, dest_name)
 
-                    for n in chunk_names:
-                        await pool.call(self._fs._remove_doesnt_exist_ok, f'gs://{self._bucket}/{n}')
+                    for name in chunk_names:
+                        await pool.call(self._fs._remove_doesnt_exist_ok, f'gs://{self._bucket}/{name}')
 
                 await tree_compose(
                     [self._part_name(i) for i in range(self._num_parts)],
@@ -555,15 +586,14 @@ class GoogleStorageAsyncFS(AsyncFS):
 
     def __init__(self, *,
                  storage_client: Optional[GoogleStorageClient] = None,
-                 project: Optional[str] = None,
                  **kwargs):
         if not storage_client:
-            if project is not None:
-                if 'params' not in kwargs:
-                    kwargs['params'] = {}
-                kwargs['params']['userProject'] = project
             storage_client = GoogleStorageClient(**kwargs)
         self._storage_client = storage_client
+
+    @staticmethod
+    def valid_url(url: str) -> bool:
+        return url.startswith('gs://')
 
     def parse_url(self, url: str) -> GoogleStorageAsyncFSURL:
         return GoogleStorageAsyncFSURL(*self.get_bucket_and_name(url))

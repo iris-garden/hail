@@ -35,6 +35,11 @@ a Batch Service account. A :ref:`Google Service Account <service-accounts>` is c
 on your behalf. A trial Batch billing project is also created for you at
 :code:`<USERNAME>-trial`. You can view these at `<https://auth.hail.is/user>`__.
 
+To create a new Hail Batch billing project (separate from the automatically created trial billing
+project), send an inquiry using this `billing project creation form <https://docs.google.com/forms/u/0/d/e/1FAIpQLSc1DoqSZKtt1VjVhJjNzzFL8Wfoi5QAFLHuSPwGLnamdtDzHg/viewform>`__.
+To modify an existing Hail Batch billing project, send an inquiry using this
+`billing project modification form <https://docs.google.com/forms/d/e/1FAIpQLSdOdrYE2ZlT6GmMI8ShSoR8uKyePkZ8UJ2Hel7dWaHYAC-TBA/viewform>`__.
+
 
 .. _file-localization:
 
@@ -69,24 +74,26 @@ for more information about access control.
 
 .. code-block:: sh
 
-    gsutil iam ch serviceAccount:[SERVICE_ACCOUNT_NAME]:objectAdmin gs://[BUCKET_NAME]
+    gcloud storage buckets add-iam-policy-binding gs://<BUCKET_NAME> \
+       --member=serviceAccount:<SERVICE_ACCOUNT_NAME> \
+       --role=roles/storage.objectAdmin
 
-The Google Artifact Registry is a Docker repository hosted by Google that is an alternative
-to Docker Hub for storing images. It is recommended to use the artifact registry for images that shouldn't be publically
-available. If you have an artifact registry `associated with your project <https://cloud.google.com/artifact-registry/docs/>`__,
-then you can enable the service account to view Docker images with the command below where
-`SERVICE_ACCOUNT_NAME` is your full service account name, `<PROJECT>` is the name of your google project, and `<REPO>` is the name of your repository
-you want to grant access to and has a path that has the following prefix `us-docker.pkg.dev/<MY_PROJECT>`:
+The Google Artifact Registry is a Docker repository hosted by Google that is an alternative to
+Docker Hub for storing images. It is recommended to use the artifact registry for images that
+shouldn't be publically available. If you have an artifact registry `associated with your project
+<https://cloud.google.com/artifact-registry/docs/>`__, then you can enable the service account to
+view Docker images with the command below where `SERVICE_ACCOUNT_NAME` is your full service account
+name, and `<REPO>` is the name of your repository you want to grant access to and has a path that
+has the following prefix `us-docker.pkg.dev/<MY_PROJECT>`:
 
 .. code-block:: sh
 
-   gcloud artifacts repositories add-iam-policy-binding <REPO> \
-       --member=<SERVICE_ACCOUNT_NAME> --role=roles/artifactregistry.repoAdmin
+    gcloud artifacts repositories add-iam-policy-binding <REPO> \
+           --member=<SERVICE_ACCOUNT_NAME> --role=roles/artifactregistry.repoAdmin
 
-If you want to run gcloud or gsutil commands within your Batch jobs, the service
-account file is available at `/gsa-key/key.json` in the main container. You can authenticate using the service
-account by adding the following line to your user code and using a Docker image that has gcloud and gsutil
-installed.
+If you want to run gcloud commands within your Batch jobs, the service account file is available at
+`/gsa-key/key.json` in the main container. You can authenticate using the service account by adding
+the following line to your user code and using a Docker image that has gcloud installed.
 
 .. code-block:: sh
 
@@ -96,16 +103,29 @@ installed.
 Billing
 -------
 
-The cost for executing a job depends on the underlying machine type and how much CPU and
-memory is being requested. Currently, Batch runs most jobs on 16 core, preemptible, n1
+The cost for executing a job depends on the underlying machine type, the region in which the VM is running in,
+and how much CPU and memory is being requested. Currently, Batch runs most jobs on 16 core, preemptible, n1
 machines with 10 GB of persistent SSD boot disk and 375 GB of local SSD. The costs are as follows:
 
 - Compute cost
-   = $0.01 per core per hour for **standard** worker types
 
-   = $0.012453 per core per hour for **highmem** worker types
+    .. caution::
 
-   = $0.0074578 per core per hour for **highcpu** worker types
+        The prices shown below are **approximate** prices based on us-central1. Actual prices are
+        based on the current spot prices for a given worker type and the region in which the worker is running in.
+        You can use :meth:`.Job.regions` to specify which regions to run a job in.
+
+   = $0.01 per core per hour for **preemptible standard** worker types
+
+   = $0.012453 per core per hour for **preemptible highmem** worker types
+
+   = $0.0074578 per core per hour for **preemptible highcpu** worker types
+
+   = $0.04749975 per core per hour for **nonpreemptible standard** worker types
+
+   = $0.0591515 per core per hour for **nonpreemptible highmem** worker types
+
+   = $0.0354243 per core per hour for **nonpreemptible highcpu** worker types
 
 - Disk cost
    - Boot Disk
@@ -156,6 +176,8 @@ At any given moment as many as four cores of the cluster may come from a 4 core 
 is standard. If a job is scheduled on this machine, then the cost per core hour is **$0.02774** plus
 **$0.00023** per GB per hour storage of extra storage requested.
 
+For jobs that run on non-preemptible machines, the costs are **$0.060462** per core/hour for standard workers, **$0.072114** per core/hour
+for highmem workers, and **$0.048365** per core/hour for highcpu workers.
 
 .. note::
 

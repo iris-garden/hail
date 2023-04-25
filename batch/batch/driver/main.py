@@ -2,15 +2,15 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import re
 import signal
 from collections import defaultdict
 from functools import wraps
-from typing import Dict, Set, Tuple
+from typing import Any, Dict, Set, Tuple
 
 import aiohttp_session
 import dictdiffer
-import googlecloudprofiler
 import kubernetes_asyncio.client
 import kubernetes_asyncio.config
 import pandas as pd
@@ -31,18 +31,11 @@ from gear import (
     transaction,
 )
 from gear.clients import get_cloud_async_fs
+from gear.profiling import install_profiler_if_requested
 from hailtop import aiotools, httpx
 from hailtop.config import get_deploy_config
 from hailtop.hail_logging import AccessLogger
-from hailtop.utils import (
-    AsyncWorkerPool,
-    Notice,
-    dump_all_stacktraces,
-    flatten,
-    periodically_call,
-    serialization,
-    time_msecs,
-)
+from hailtop.utils import AsyncWorkerPool, Notice, dump_all_stacktraces, flatten, periodically_call, time_msecs
 from web_common import render_template, set_message, setup_aiohttp_jinja2, setup_common_static_routes
 
 from ..batch import cancel_batch_in_db
@@ -50,9 +43,6 @@ from ..batch_configuration import (
     BATCH_STORAGE_URI,
     CLOUD,
     DEFAULT_NAMESPACE,
-    HAIL_SHA,
-    HAIL_SHOULD_CHECK_INVARIANTS,
-    HAIL_SHOULD_PROFILE,
     MACHINE_NAME_PREFIX,
     REFRESH_INTERVAL_IN_SECONDS,
 )
@@ -80,16 +70,6 @@ routes = web.RouteTableDef()
 deploy_config = get_deploy_config()
 
 auth = AuthClient()
-
-
-def ignore_failed_to_collect_and_upload_profile(record):
-    if 'Failed to collect and upload profile: [Errno 32] Broken pipe' in record.msg:
-        record.levelno = logging.INFO
-        record.levelname = "INFO"
-    return record
-
-
-googlecloudprofiler.logger.addFilter(ignore_failed_to_collect_and_upload_profile)
 
 
 def instance_name_from_request(request):
@@ -177,10 +157,13 @@ async def get_healthcheck(request):  # pylint: disable=W0613
 @routes.get('/check_invariants')
 @auth.rest_authenticated_developers_only
 async def get_check_invariants(request, userdata):  # pylint: disable=unused-argument
-    app = request.app
+    db: Database = request.app['db']
+    incremental_result, resource_agg_result = await asyncio.gather(
+        check_incremental(db), check_resource_aggregation(db), return_exceptions=True
+    )
     data = {
-        'check_incremental_error': app['check_incremental_error'],
-        'check_resource_aggregation_error': app['check_resource_aggregation_error'],
+        'check_incremental_error': incremental_result,
+        'check_resource_aggregation_error': resource_agg_result,
     }
     return web.json_response(data=data)
 
@@ -262,6 +245,7 @@ async def get_gsa_key(request, instance):  # pylint: disable=unused-argument
     return await asyncio.shield(get_gsa_key_1(instance))
 
 
+# deprecated
 @routes.get('/api/v1alpha/instances/credentials')
 @activating_instances_only
 async def get_credentials(request, instance):  # pylint: disable=unused-argument
@@ -314,6 +298,7 @@ async def kill_instance(request, userdata):  # pylint: disable=unused-argument
 async def job_complete_1(request, instance):
     body = await request.json()
     job_status = body['status']
+    marked_job_started = body.get('marked_job_started', False)
 
     batch_id = job_status['batch_id']
     job_id = job_status['job_id']
@@ -345,6 +330,7 @@ async def job_complete_1(request, instance):
         end_time,
         'completed',
         resources,
+        marked_job_started=marked_job_started,
     )
 
     await instance.mark_healthy()
@@ -453,8 +439,7 @@ FROM user_inst_coll_resources;
 @auth.web_authenticated_developers_only()
 async def get_quotas(request, userdata):
     if CLOUD != 'gcp':
-        page_context = {"plot_json": None}
-        return await render_template('batch-driver', request, userdata, 'quotas.html', page_context)
+        return await render_template('batch-driver', request, userdata, 'quotas.html', {"plot_json": None})
 
     data = request.app['driver'].get_quotas()
 
@@ -516,9 +501,7 @@ async def get_quotas(request, userdata):
     )
 
     plot_json = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-
-    page_context = {"plot_json": plot_json}
-    return await render_template('batch-driver', request, userdata, 'quotas.html', page_context)
+    return await render_template('batch-driver', request, userdata, 'quotas.html', {"plot_json": plot_json})
 
 
 class ConfigError(Exception):
@@ -601,14 +584,24 @@ async def pool_config_update(request, userdata):  # pylint: disable=unused-argum
             raise ConfigError()
 
         max_instances = validate_int(
-            session, 'Max instances', post['max_instances'], lambda v: v > 0, 'a positive integer'
+            session, 'Max instances', post['max_instances'], lambda v: v >= 0, 'a non-negative integer'
         )
 
         max_live_instances = validate_int(
-            session, 'Max live instances', post['max_live_instances'], lambda v: v > 0, 'a positive integer'
+            session,
+            'Max live instances',
+            post['max_live_instances'],
+            lambda v: 0 <= v <= max_instances,
+            'a non-negative integer',
         )
 
-        enable_standing_worker = 'enable_standing_worker' in post
+        min_instances = validate_int(
+            session,
+            'Min instances',
+            post['min_instances'],
+            lambda v: 0 <= v <= max_live_instances,
+            f'a non-negative integer less than or equal to max_live_instances {max_live_instances}',
+        )
 
         possible_worker_cores = []
         for cores in possible_cores_from_worker_type(pool.cloud, worker_type):
@@ -647,19 +640,64 @@ async def pool_config_update(request, userdata):  # pylint: disable=unused-argum
                 set_message(session, f'External SSD must be at least {min_disk_storage} GB', 'error')
                 raise ConfigError()
 
+        max_new_instances_per_autoscaler_loop = validate_int(
+            session,
+            'Max instances per autoscaler loop',
+            post['max_new_instances_per_autoscaler_loop'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
+        autoscaler_loop_period_secs = validate_int(
+            session,
+            'Autoscaler loop period in seconds',
+            post['autoscaler_loop_period_secs'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
+        worker_max_idle_time_secs = validate_int(
+            session,
+            'Worker max idle time in seconds',
+            post['worker_max_idle_time_secs'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
+        standing_worker_max_idle_time_secs = validate_int(
+            session,
+            'Standing worker max idle time in seconds',
+            post['standing_worker_max_idle_time_secs'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
+        job_queue_scheduling_window_secs = validate_int(
+            session,
+            'Job queue scheduling window in seconds',
+            post['job_queue_scheduling_window_secs'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
         proposed_pool_config = PoolConfig(
-            pool_name,
-            pool.cloud,
-            worker_type,
-            worker_cores,
-            worker_local_ssd_data_disk,
-            worker_external_ssd_data_disk_size_gb,
-            enable_standing_worker,
-            standing_worker_cores,
-            boot_disk_size_gb,
-            max_instances,
-            max_live_instances,
-            pool.preemptible,
+            name=pool_name,
+            cloud=pool.cloud,
+            worker_type=worker_type,
+            worker_cores=worker_cores,
+            worker_local_ssd_data_disk=worker_local_ssd_data_disk,
+            worker_external_ssd_data_disk_size_gb=worker_external_ssd_data_disk_size_gb,
+            standing_worker_cores=standing_worker_cores,
+            boot_disk_size_gb=boot_disk_size_gb,
+            min_instances=min_instances,
+            max_instances=max_instances,
+            max_live_instances=max_live_instances,
+            preemptible=pool.preemptible,
+            max_new_instances_per_autoscaler_loop=max_new_instances_per_autoscaler_loop,
+            autoscaler_loop_period_secs=autoscaler_loop_period_secs,
+            worker_max_idle_time_secs=worker_max_idle_time_secs,
+            standing_worker_max_idle_time_secs=standing_worker_max_idle_time_secs,
+            job_queue_scheduling_window_secs=job_queue_scheduling_window_secs,
         )
 
         current_client_pool_config = json.loads(post['_pool_config_json'])
@@ -726,7 +764,38 @@ async def job_private_config_update(request, userdata):  # pylint: disable=unuse
             session, 'Max live instances', post['max_live_instances'], lambda v: v > 0, 'a positive integer'
         )
 
-        await jpim.configure(boot_disk_size_gb, max_instances, max_live_instances)
+        max_new_instances_per_autoscaler_loop = validate_int(
+            session,
+            'Max instances per autoscaler loop',
+            post['max_new_instances_per_autoscaler_loop'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
+        autoscaler_loop_period_secs = validate_int(
+            session,
+            'Autoscaler loop period in seconds',
+            post['autoscaler_loop_period_secs'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
+        worker_max_idle_time_secs = validate_int(
+            session,
+            'Worker max idle time in seconds',
+            post['worker_max_idle_time_secs'],
+            lambda v: v > 0,
+            'a positive integer',
+        )
+
+        await jpim.configure(
+            boot_disk_size_gb=boot_disk_size_gb,
+            max_instances=max_instances,
+            max_live_instances=max_live_instances,
+            max_new_instances_per_autoscaler_loop=max_new_instances_per_autoscaler_loop,
+            autoscaler_loop_period_secs=autoscaler_loop_period_secs,
+            worker_max_idle_time_secs=worker_max_idle_time_secs,
+        )
 
         set_message(session, f'Updated configuration for {jpim}.', 'info')
     except ConfigError:
@@ -885,7 +954,7 @@ HAVING n_ready_jobs + n_running_jobs > 0;
     return await render_template('batch-driver', request, userdata, 'user_resources.html', page_context)
 
 
-async def check_incremental(app, db):
+async def check_incremental(db):
     @transaction(db, read_only=True)
     async def check(tx):
         user_inst_coll_with_broken_resources = tx.execute_and_fetchall(
@@ -947,14 +1016,10 @@ LOCK IN SHARE MODE;
         if len(failures) > 0:
             raise ValueError(json.dumps(failures))
 
-    try:
-        await check()  # pylint: disable=no-value-for-parameter
-    except Exception as e:
-        app['check_incremental_error'] = serialization.exception_to_dict(e)
-        log.exception('while checking incremental')
+    await check()  # pylint: disable=no-value-for-parameter
 
 
-async def check_resource_aggregation(app, db):
+async def check_resource_aggregation(db):
     def merge(r1, r2):
         if r1 is None:
             r1 = {}
@@ -984,7 +1049,7 @@ async def check_resource_aggregation(app, db):
         if d is None:
             d = {}
         d = copy.deepcopy(d)
-        result = {}
+        result: Dict[str, Any] = {}
         for k, v in d.items():
             seqop(result, key_f(k), v)
         return result
@@ -1092,11 +1157,7 @@ LOCK IN SHARE MODE;
             agg_billing_project_resources,
         )
 
-    try:
-        await check()  # pylint: disable=no-value-for-parameter
-    except Exception as e:
-        app['check_resource_aggregation_error'] = serialization.exception_to_dict(e)
-        log.exception('while checking resource aggregation')
+    await check()  # pylint: disable=no-value-for-parameter
 
 
 async def _cancel_batch(app, batch_id):
@@ -1325,24 +1386,17 @@ SELECT instance_id, internal_token, frozen FROM globals;
     app['cancel_running_state_changed'] = asyncio.Event()
     app['async_worker_pool'] = AsyncWorkerPool(100, queue_size=100)
 
-    credentials_file = '/gsa-key/key.json'
-    fs = get_cloud_async_fs(credentials_file=credentials_file)
+    fs = get_cloud_async_fs()
     app['file_store'] = FileStore(fs, BATCH_STORAGE_URI, instance_id)
 
     inst_coll_configs = await InstanceCollectionConfigs.create(db)
 
+    credentials_file = '/gsa-key/key.json'
     app['driver'] = await get_cloud_driver(
         app, db, MACHINE_NAME_PREFIX, DEFAULT_NAMESPACE, inst_coll_configs, credentials_file, task_manager
     )
 
     app['canceller'] = await Canceller.create(app)
-
-    app['check_incremental_error'] = None
-    app['check_resource_aggregation_error'] = None
-
-    if HAIL_SHOULD_CHECK_INVARIANTS:
-        task_manager.ensure_future(periodically_call(10, check_incremental, app, db))
-        task_manager.ensure_future(periodically_call(10, check_resource_aggregation, app, db))
 
     task_manager.ensure_future(periodically_call(10, monitor_billing_limits, app))
     task_manager.ensure_future(periodically_call(10, cancel_fast_failing_batches, app))
@@ -1383,16 +1437,7 @@ async def on_cleanup(app):
 
 
 def run():
-    if HAIL_SHOULD_PROFILE and CLOUD == 'gcp':
-        profiler_tag = f'{DEFAULT_NAMESPACE}'
-        if profiler_tag == 'default':
-            profiler_tag = DEFAULT_NAMESPACE + f'-{HAIL_SHA[0:12]}'
-        googlecloudprofiler.start(
-            service='batch-driver',
-            service_version=profiler_tag,
-            # https://cloud.google.com/profiler/docs/profiling-python#agent_logging
-            verbose=3,
-        )
+    install_profiler_if_requested('batch-driver')
 
     app = web.Application(client_max_size=HTTP_CLIENT_MAX_SIZE, middlewares=[monitor_endpoints_middleware])
     setup_aiohttp_session(app)
@@ -1410,6 +1455,6 @@ def run():
     web.run_app(
         deploy_config.prefix_application(app, 'batch-driver', client_max_size=HTTP_CLIENT_MAX_SIZE),
         host='0.0.0.0',
-        port=5000,
+        port=int(os.environ['PORT']),
         access_log_class=BatchDriverAccessLogger,
     )

@@ -1,3 +1,4 @@
+from typing import Set
 import pkg_resources
 import sys
 import os
@@ -7,17 +8,14 @@ import socketserver
 from threading import Thread
 import py4j
 import pyspark
+import pyspark.sql
 
 from typing import List, Optional
 
 import hail as hl
-from hail.utils.java import Env, scala_package_object, scala_object
-from hail.expr.types import dtype
-from hail.expr.table_type import ttable
-from hail.expr.matrix_type import tmatrix
-from hail.expr.blockmatrix_type import tblockmatrix
+from hail.utils.java import scala_package_object
+from hail.fs.hadoop_fs import HadoopFS
 from hail.ir.renderer import CSERenderer
-from hail.ir import finalize_randomness
 from hail.table import Table
 from hail.matrixtable import MatrixTable
 
@@ -118,6 +116,14 @@ class Log4jLogger(Logger):
         self._log_pkg.info(msg)
 
 
+def append_to_comma_separated_list(conf: pyspark.SparkConf, k: str, *new_values: str):
+    old = conf.get(k, None)
+    if old is None:
+        conf.set(k, ','.join(new_values))
+    else:
+        conf.set(k, old + ',' + ','.join(new_values))
+
+
 class SparkBackend(Py4JBackend):
     def __init__(self, idempotent, sc, spark_conf, app_name, master,
                  local, log, quiet, append, min_block_size,
@@ -143,17 +149,31 @@ class SparkBackend(Py4JBackend):
             if os.environ.get('HAIL_SPARK_MONITOR') or os.environ.get('AZURE_SPARK') == '1':
                 import sparkmonitor
                 jars.append(os.path.join(os.path.dirname(sparkmonitor.__file__), 'listener.jar'))
-                conf.set("spark.extraListeners", "sparkmonitor.listener.JupyterSparkMonitorListener")
+                append_to_comma_separated_list(
+                    conf,
+                    'spark.extraListeners',
+                    'sparkmonitor.listener.JupyterSparkMonitorListener'
+                )
 
-            conf.set('spark.jars', ','.join(jars))
+            append_to_comma_separated_list(
+                conf,
+                'spark.jars',
+                *jars
+            )
             if os.environ.get('AZURE_SPARK') == '1':
                 print('AZURE_SPARK environment variable is set to "1", assuming you are in HDInsight.')
                 # Setting extraClassPath in HDInsight overrides the classpath entirely so you can't
                 # load the Scala standard library. Interestingly, setting extraClassPath is not
                 # necessary in HDInsight.
             else:
-                conf.set('spark.driver.extraClassPath', ','.join(jars))
-                conf.set('spark.executor.extraClassPath', './hail-all-spark.jar')
+                append_to_comma_separated_list(
+                    conf,
+                    'spark.driver.extraClassPath',
+                    *jars)
+                append_to_comma_separated_list(
+                    conf,
+                    'spark.executor.extraClassPath',
+                    './hail-all-spark.jar')
 
             if sc is None:
                 pyspark.SparkContext._ensure_initialized(conf=conf)
@@ -180,16 +200,16 @@ class SparkBackend(Py4JBackend):
 
         if idempotent:
             self._jbackend = hail_package.backend.spark.SparkBackend.getOrCreate(
-                jsc, app_name, master, local, True, min_block_size, tmpdir, local_tmpdir,
+                jsc, app_name, master, local, log, True, append, skip_logging_configuration, min_block_size, tmpdir, local_tmpdir,
                 gcs_requester_pays_project, gcs_requester_pays_buckets)
             self._jhc = hail_package.HailContext.getOrCreate(
-                self._jbackend, log, True, append, branching_factor, skip_logging_configuration, optimizer_iterations)
+                self._jbackend, branching_factor, optimizer_iterations)
         else:
             self._jbackend = hail_package.backend.spark.SparkBackend.apply(
-                jsc, app_name, master, local, True, min_block_size, tmpdir, local_tmpdir,
+                jsc, app_name, master, local, log, True, append, skip_logging_configuration, min_block_size, tmpdir, local_tmpdir,
                 gcs_requester_pays_project, gcs_requester_pays_buckets)
             self._jhc = hail_package.HailContext.apply(
-                self._jbackend, log, True, append, branching_factor, skip_logging_configuration, optimizer_iterations)
+                self._jbackend, branching_factor, optimizer_iterations)
 
         self._jsc = self._jbackend.sc()
         if sc:
@@ -198,6 +218,7 @@ class SparkBackend(Py4JBackend):
             self.sc = pyspark.SparkContext(gateway=self._gateway, jsc=self._jvm.JavaSparkContext(self._jsc))
         self._jspark_session = self._jbackend.sparkSession()
         self._spark_session = pyspark.sql.SparkSession(self.sc, self._jspark_session)
+        self._registered_ir_function_names: Set[str] = set()
 
         # This has to go after creating the SparkSession. Unclear why.
         # Maybe it does its own patch?
@@ -220,9 +241,9 @@ class SparkBackend(Py4JBackend):
             if self._jsc.uiWebUrl().isDefined():
                 sys.stderr.write('SparkUI available at {}\n'.format(self._jsc.uiWebUrl().get()))
 
-            connect_logger(self._utils_package_object, 'localhost', 12888)
-
             self._jbackend.startProgressBar()
+
+        self._initialize_flags()
 
     def jvm(self):
         return self._jvm
@@ -233,28 +254,17 @@ class SparkBackend(Py4JBackend):
     def utils_package_object(self):
         return self._utils_package_object
 
+    def validate_file_scheme(self, url):
+        pass
+
     def stop(self):
         self._jbackend.close()
         self._jhc.stop()
         self._jhc = None
         self.sc.stop()
         self.sc = None
+        self._registered_ir_function_names = set()
         uninstall_exception_handler()
-
-    def _parse_value_ir(self, code, ref_map={}, ir_map={}):
-        return self._jbackend.parse_value_ir(
-            code,
-            {k: t._parsable_string() for k, t in ref_map.items()},
-            ir_map)
-
-    def _parse_table_ir(self, code, ir_map={}):
-        return self._jbackend.parse_table_ir(code, ir_map)
-
-    def _parse_matrix_ir(self, code, ir_map={}):
-        return self._jbackend.parse_matrix_ir(code, ir_map)
-
-    def _parse_blockmatrix_ir(self, code, ir_map={}):
-        return self._jbackend.parse_blockmatrix_ir(code, ir_map)
 
     @property
     def logger(self):
@@ -265,60 +275,8 @@ class SparkBackend(Py4JBackend):
     @property
     def fs(self):
         if self._fs is None:
-            from hail.fs.hadoop_fs import HadoopFS
             self._fs = HadoopFS(self._utils_package_object, self._jbackend.fs())
         return self._fs
-
-    def _to_java_ir(self, ir, parse):
-        if not hasattr(ir, '_jir'):
-            r = CSERenderer(stop_at_jir=True)
-            # FIXME parse should be static
-            ir._jir = parse(r(finalize_randomness(ir)), ir_map=r.jirs)
-        return ir._jir
-
-    def _to_java_value_ir(self, ir):
-        return self._to_java_ir(ir, self._parse_value_ir)
-
-    def _to_java_table_ir(self, ir):
-        return self._to_java_ir(ir, self._parse_table_ir)
-
-    def _to_java_matrix_ir(self, ir):
-        return self._to_java_ir(ir, self._parse_matrix_ir)
-
-    def _to_java_blockmatrix_ir(self, ir):
-        return self._to_java_ir(ir, self._parse_blockmatrix_ir)
-
-    def value_type(self, ir):
-        jir = self._to_java_value_ir(ir)
-        return dtype(jir.typ().toString())
-
-    def table_type(self, tir):
-        jir = self._to_java_table_ir(tir)
-        return ttable._from_java(jir.typ())
-
-    def matrix_type(self, mir):
-        jir = self._to_java_matrix_ir(mir)
-        return tmatrix._from_java(jir.typ())
-
-    def persist_table(self, t, storage_level):
-        return Table._from_java(self._jbackend.pyPersistTable(storage_level, self._to_java_table_ir(t._tir)))
-
-    def unpersist_table(self, t):
-        return Table._from_java(self._to_java_table_ir(t._tir).pyUnpersist())
-
-    def persist_matrix_table(self, mt, storage_level):
-        ir = mt._mir.handle_randomness(None, None)
-        return MatrixTable._from_java(self._jbackend.pyPersistMatrix(storage_level, self._to_java_matrix_ir(ir)))
-
-    def unpersist_matrix_table(self, mt):
-        return MatrixTable._from_java(self._to_java_matrix_ir(mt._mir).pyUnpersist())
-
-    def unpersist_block_matrix(self, id):
-        self._jhc.backend().unpersist(id)
-
-    def blockmatrix_type(self, bmir):
-        jir = self._to_java_blockmatrix_ir(bmir)
-        return tblockmatrix._from_java(jir.typ())
 
     def from_spark(self, df, key):
         return Table._from_java(self._jbackend.pyFromDF(df._jdf, key))
@@ -327,53 +285,14 @@ class SparkBackend(Py4JBackend):
         t = t.expand_types()
         if flatten:
             t = t.flatten()
-        return pyspark.sql.DataFrame(self._jbackend.pyToDF(self._to_java_table_ir(t._tir)),
-                                     Env.spark_session()._wrapped)
-
-    def add_reference(self, config):
-        self.hail_package().variant.ReferenceGenome.fromJSON(json.dumps(config))
-
-    def load_references_from_dataset(self, path):
-        return json.loads(self.hail_package().variant.ReferenceGenome.fromHailDataset(self.fs._jfs, path))
-
-    def from_fasta_file(self, name, fasta_file, index_file, x_contigs, y_contigs, mt_contigs, par):
-        self._jbackend.pyFromFASTAFile(
-            name, fasta_file, index_file, x_contigs, y_contigs, mt_contigs, par)
-
-    def remove_reference(self, name):
-        self.hail_package().variant.ReferenceGenome.removeReference(name)
-
-    def get_reference(self, name):
-        return json.loads(self.hail_package().variant.ReferenceGenome.getReference(name).toJSONString())
-
-    def add_sequence(self, name, fasta_file, index_file):
-        self._jbackend.pyAddSequence(name, fasta_file, index_file)
-
-    def remove_sequence(self, name):
-        scala_object(self.hail_package().variant, 'ReferenceGenome').removeSequence(name)
-
-    def add_liftover(self, name, chain_file, dest_reference_genome):
-        self._jbackend.pyReferenceAddLiftover(name, chain_file, dest_reference_genome)
-
-    def remove_liftover(self, name, dest_reference_genome):
-        scala_object(self.hail_package().variant, 'ReferenceGenome').referenceRemoveLiftover(
-            name, dest_reference_genome)
-
-    def parse_vcf_metadata(self, path):
-        return json.loads(self._jhc.pyParseVCFMetadataJSON(self.fs._jfs, path))
-
-    def index_bgen(self, files, index_file_map, referenceGenomeName, contig_recoding, skip_invalid_loci):
-        self._jbackend.pyIndexBgen(files, index_file_map, referenceGenomeName, contig_recoding, skip_invalid_loci)
-
-    def import_fam(self, path: str, quant_pheno: bool, delimiter: str, missing: str):
-        return json.loads(self._jbackend.pyImportFam(path, quant_pheno, delimiter, missing))
+        return pyspark.sql.DataFrame(self._jbackend.pyToDF(self._to_java_table_ir(t._tir)), self._spark_session)
 
     def register_ir_function(self, name, type_parameters, argument_names, argument_types, return_type, body):
-
         r = CSERenderer(stop_at_jir=True)
         assert not body._ir.uses_randomness
         code = r(body._ir)
         jbody = (self._parse_value_ir(code, ref_map=dict(zip(argument_names, argument_types)), ir_map=r.jirs))
+        self._registered_ir_function_names.add(name)
 
         self.hail_package().expr.ir.functions.IRFunctionRegistry.pyRegisterIR(
             name,
@@ -381,6 +300,9 @@ class SparkBackend(Py4JBackend):
             argument_names, [pt._parsable_string() for pt in argument_types],
             return_type._parsable_string(),
             jbody)
+
+    def _is_registered_ir_function_name(self, name: str) -> bool:
+        return name in self._registered_ir_function_names
 
     def read_multiple_matrix_tables(self, paths: 'List[str]', intervals: 'List[hl.Interval]', intervals_type):
         json_repr = {

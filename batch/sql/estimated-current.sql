@@ -9,8 +9,10 @@ CREATE TABLE IF NOT EXISTS `resources` (
   `resource` VARCHAR(100) NOT NULL,
   `rate` DOUBLE NOT NULL,
   `resource_id` INT AUTO_INCREMENT UNIQUE NOT NULL,
+  `deduped_resource_id` INT DEFAULT NULL,
   PRIMARY KEY (`resource`)
 ) ENGINE = InnoDB;
+CREATE INDEX `resources_deduped_resource_id` ON `resources` (`deduped_resource_id`);
 
 CREATE TABLE IF NOT EXISTS `latest_product_versions` (
   `product` VARCHAR(100) NOT NULL,
@@ -26,6 +28,9 @@ CREATE TABLE IF NOT EXISTS `inst_colls` (
   `max_instances` BIGINT NOT NULL,
   `max_live_instances` BIGINT NOT NULL,
   `cloud` VARCHAR(100) NOT NULL,
+  `max_new_instances_per_autoscaler_loop` INT NOT NULL,
+  `autoscaler_loop_period_secs` INT NOT NULL,
+  `worker_max_idle_time_secs` INT NOT NULL,
   PRIMARY KEY (`name`)
 ) ENGINE = InnoDB;
 CREATE INDEX `inst_colls_is_pool` ON `inst_colls` (`is_pool`);
@@ -44,6 +49,9 @@ CREATE TABLE IF NOT EXISTS `pools` (
   `enable_standing_worker` BOOLEAN NOT NULL DEFAULT FALSE,
   `standing_worker_cores` BIGINT NOT NULL DEFAULT 0,
   `preemptible` BOOLEAN NOT NULL DEFAULT TRUE,
+  `standing_worker_max_idle_time_secs` INT NOT NULL,
+  `job_queue_scheduling_window_secs` INT NOT NULL,
+  `min_instances` BIGINT NOT NULL,
   PRIMARY KEY (`name`),
   FOREIGN KEY (`name`) REFERENCES inst_colls(name) ON DELETE CASCADE
 ) ENGINE = InnoDB;
@@ -62,19 +70,24 @@ VALUES ('highcpu', 'highcpu', 16, 10, 1, 0, 0, 4);
 
 CREATE TABLE IF NOT EXISTS `billing_projects` (
   `name` VARCHAR(100) NOT NULL,
+  `name_cs` VARCHAR(100) NOT NULL COLLATE utf8mb4_0900_as_cs,
   `status` ENUM('open', 'closed', 'deleted') NOT NULL DEFAULT 'open',
   `limit` DOUBLE DEFAULT NULL,
   `msec_mcpu` BIGINT DEFAULT 0,
   PRIMARY KEY (`name`)
 ) ENGINE = InnoDB;
 CREATE INDEX `billing_project_status` ON `billing_projects` (`status`);
+CREATE UNIQUE INDEX `billing_project_name_cs` ON `billing_projects` (`name_cs`);
+CREATE INDEX `billing_project_name_cs_status` ON `billing_projects` (`name_cs`, `status`);
 
 CREATE TABLE IF NOT EXISTS `billing_project_users` (
   `billing_project` VARCHAR(100) NOT NULL,
   `user` VARCHAR(100) NOT NULL,
+  `user_cs` VARCHAR(100) NOT NULL COLLATE utf8mb4_0900_as_cs,
   PRIMARY KEY (`billing_project`, `user`),
   FOREIGN KEY (`billing_project`) REFERENCES billing_projects(name) ON DELETE CASCADE
 ) ENGINE = InnoDB;
+CREATE INDEX `billing_project_users_billing_project_user_cs` ON `billing_project_users` (`billing_project`, `user_cs`);
 
 INSERT INTO `billing_projects` (`name`)
 VALUES ('ci');
@@ -330,37 +343,6 @@ CREATE TABLE IF NOT EXISTS `batch_attributes` (
 ) ENGINE = InnoDB;
 CREATE INDEX batch_attributes_key_value ON `batch_attributes` (`key`, `value`(256));
 
-CREATE TABLE IF NOT EXISTS `aggregated_billing_project_resources` (
-  `billing_project` VARCHAR(100) NOT NULL,
-  `resource` VARCHAR(100) NOT NULL,
-  `token` INT NOT NULL,
-  `usage` BIGINT NOT NULL DEFAULT 0,
-  PRIMARY KEY (`billing_project`, `resource`, `token`),
-  FOREIGN KEY (`billing_project`) REFERENCES billing_projects(name) ON DELETE CASCADE,
-  FOREIGN KEY (`resource`) REFERENCES resources(`resource`) ON DELETE CASCADE
-) ENGINE = InnoDB;
-
-CREATE TABLE IF NOT EXISTS `aggregated_batch_resources` (
-  `batch_id` BIGINT NOT NULL,
-  `resource` VARCHAR(100) NOT NULL,
-  `token` INT NOT NULL,
-  `usage` BIGINT NOT NULL DEFAULT 0,
-  PRIMARY KEY (`batch_id`, `resource`, `token`),
-  FOREIGN KEY (`batch_id`) REFERENCES batches(`id`) ON DELETE CASCADE,
-  FOREIGN KEY (`resource`) REFERENCES resources(`resource`) ON DELETE CASCADE
-) ENGINE = InnoDB;
-
-CREATE TABLE IF NOT EXISTS `aggregated_job_resources` (
-  `batch_id` BIGINT NOT NULL,
-  `job_id` INT NOT NULL,
-  `resource` VARCHAR(100) NOT NULL,
-  `usage` BIGINT NOT NULL DEFAULT 0,
-  PRIMARY KEY (`batch_id`, `job_id`, `resource`),
-  FOREIGN KEY (`batch_id`) REFERENCES batches(`id`) ON DELETE CASCADE,
-  FOREIGN KEY (`batch_id`, `job_id`) REFERENCES jobs(`batch_id`, `job_id`) ON DELETE CASCADE,
-  FOREIGN KEY (`resource`) REFERENCES resources(`resource`) ON DELETE CASCADE
-) ENGINE = InnoDB;
-
 DROP TABLE IF EXISTS `aggregated_billing_project_user_resources_v2`;
 CREATE TABLE IF NOT EXISTS `aggregated_billing_project_user_resources_v2` (
   `billing_project` VARCHAR(100) NOT NULL,
@@ -368,6 +350,7 @@ CREATE TABLE IF NOT EXISTS `aggregated_billing_project_user_resources_v2` (
   `resource_id` INT NOT NULL,
   `token` INT NOT NULL,
   `usage` BIGINT NOT NULL DEFAULT 0,
+  `migrated` BOOLEAN DEFAULT FALSE,
   PRIMARY KEY (`billing_project`, `user`, `resource_id`, `token`),
   FOREIGN KEY (`billing_project`) REFERENCES billing_projects(name) ON DELETE CASCADE,
   FOREIGN KEY (`resource_id`) REFERENCES resources(`resource_id`) ON DELETE CASCADE
@@ -382,6 +365,7 @@ CREATE TABLE IF NOT EXISTS `aggregated_billing_project_user_resources_by_date_v2
   `resource_id` INT NOT NULL,
   `token` INT NOT NULL,
   `usage` BIGINT NOT NULL DEFAULT 0,
+  `migrated` BOOLEAN DEFAULT FALSE,
   PRIMARY KEY (`billing_date`, `billing_project`, `user`, `resource_id`, `token`),
   FOREIGN KEY (`billing_project`) REFERENCES billing_projects(name) ON DELETE CASCADE,
   FOREIGN KEY (`resource_id`) REFERENCES resources(`resource_id`) ON DELETE CASCADE
@@ -394,6 +378,7 @@ CREATE TABLE IF NOT EXISTS `aggregated_batch_resources_v2` (
   `resource_id` INT NOT NULL,
   `token` INT NOT NULL,
   `usage` BIGINT NOT NULL DEFAULT 0,
+  `migrated` BOOLEAN DEFAULT FALSE,
   PRIMARY KEY (`batch_id`, `resource_id`, `token`),
   FOREIGN KEY (`batch_id`) REFERENCES batches(`id`) ON DELETE CASCADE,
   FOREIGN KEY (`resource_id`) REFERENCES resources(`resource_id`) ON DELETE CASCADE
@@ -401,6 +386,53 @@ CREATE TABLE IF NOT EXISTS `aggregated_batch_resources_v2` (
 
 DROP TABLE IF EXISTS `aggregated_job_resources_v2`;
 CREATE TABLE IF NOT EXISTS `aggregated_job_resources_v2` (
+  `batch_id` BIGINT NOT NULL,
+  `job_id` INT NOT NULL,
+  `resource_id` INT NOT NULL,
+  `usage` BIGINT NOT NULL DEFAULT 0,
+  `migrated` BOOLEAN DEFAULT FALSE,
+  PRIMARY KEY (`batch_id`, `job_id`, `resource_id`),
+  FOREIGN KEY (`batch_id`) REFERENCES batches(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`batch_id`, `job_id`) REFERENCES jobs(`batch_id`, `job_id`) ON DELETE CASCADE,
+  FOREIGN KEY (`resource_id`) REFERENCES resources(`resource_id`) ON DELETE CASCADE
+) ENGINE = InnoDB;
+
+CREATE TABLE IF NOT EXISTS `aggregated_billing_project_user_resources_v3` (
+  `billing_project` VARCHAR(100) NOT NULL,
+  `user` VARCHAR(100) NOT NULL,
+  `resource_id` INT NOT NULL,
+  `token` INT NOT NULL,
+  `usage` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`billing_project`, `user`, `resource_id`, `token`),
+  FOREIGN KEY (`billing_project`) REFERENCES billing_projects(name) ON DELETE CASCADE,
+  FOREIGN KEY (`resource_id`) REFERENCES resources(`resource_id`) ON DELETE CASCADE
+) ENGINE = InnoDB;
+CREATE INDEX aggregated_billing_project_user_resources_v3 ON `aggregated_billing_project_user_resources_v3` (`user`);
+
+CREATE TABLE IF NOT EXISTS `aggregated_billing_project_user_resources_by_date_v3` (
+  `billing_date` DATE NOT NULL,
+  `billing_project` VARCHAR(100) NOT NULL,
+  `user` VARCHAR(100) NOT NULL,
+  `resource_id` INT NOT NULL,
+  `token` INT NOT NULL,
+  `usage` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`billing_date`, `billing_project`, `user`, `resource_id`, `token`),
+  FOREIGN KEY (`billing_project`) REFERENCES billing_projects(name) ON DELETE CASCADE,
+  FOREIGN KEY (`resource_id`) REFERENCES resources(`resource_id`) ON DELETE CASCADE
+) ENGINE = InnoDB;
+CREATE INDEX aggregated_billing_project_user_resources_by_date_v3_user ON `aggregated_billing_project_user_resources_by_date_v3` (`billing_date`, `user`);
+
+CREATE TABLE IF NOT EXISTS `aggregated_batch_resources_v3` (
+  `batch_id` BIGINT NOT NULL,
+  `resource_id` INT NOT NULL,
+  `token` INT NOT NULL,
+  `usage` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`batch_id`, `resource_id`, `token`),
+  FOREIGN KEY (`batch_id`) REFERENCES batches(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`resource_id`) REFERENCES resources(`resource_id`) ON DELETE CASCADE
+) ENGINE = InnoDB;
+
+CREATE TABLE IF NOT EXISTS `aggregated_job_resources_v3` (
   `batch_id` BIGINT NOT NULL,
   `job_id` INT NOT NULL,
   `resource_id` INT NOT NULL,
@@ -417,6 +449,7 @@ CREATE TABLE IF NOT EXISTS `attempt_resources` (
   `attempt_id` VARCHAR(40) NOT NULL,
   `quantity` BIGINT NOT NULL,
   `resource_id` INT NOT NULL,
+  `deduped_resource_id` INT DEFAULT NULL
   PRIMARY KEY (`batch_id`, `job_id`, `attempt_id`, `resource_id`),
   FOREIGN KEY (`batch_id`) REFERENCES batches(`id`) ON DELETE CASCADE,
   FOREIGN KEY (`batch_id`, `job_id`) REFERENCES jobs(`batch_id`, `job_id`) ON DELETE CASCADE,
@@ -476,7 +509,6 @@ FOR EACH ROW
 BEGIN
   DECLARE job_cores_mcpu INT;
   DECLARE cur_billing_project VARCHAR(100);
-  DECLARE msec_diff BIGINT;
   DECLARE msec_diff_rollup BIGINT;
   DECLARE cur_n_tokens INT;
   DECLARE rand_token INT;
@@ -490,37 +522,10 @@ BEGIN
 
   SELECT billing_project INTO cur_billing_project FROM batches WHERE id = NEW.batch_id;
 
-  SET msec_diff = (GREATEST(COALESCE(NEW.end_time - NEW.start_time, 0), 0) -
-                   GREATEST(COALESCE(OLD.end_time - OLD.start_time, 0), 0));
-
   SET msec_diff_rollup = (GREATEST(COALESCE(NEW.rollup_time - NEW.start_time, 0), 0) -
                           GREATEST(COALESCE(OLD.rollup_time - OLD.start_time, 0), 0));
 
   SET cur_billing_date = CAST(UTC_DATE() AS DATE);
-
-  IF msec_diff != 0 THEN
-    INSERT INTO aggregated_billing_project_resources (billing_project, resource, token, `usage`)
-    SELECT billing_project, resources.resource, rand_token, msec_diff * quantity
-    FROM attempt_resources
-    JOIN batches ON batches.id = attempt_resources.batch_id
-    LEFT JOIN resources ON attempt_resources.resource_id = resources.resource_id
-    WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
-    ON DUPLICATE KEY UPDATE `usage` = `usage` + msec_diff * quantity;
-
-    INSERT INTO aggregated_batch_resources (batch_id, resource, token, `usage`)
-    SELECT batch_id, resources.resource, rand_token, msec_diff * quantity
-    FROM attempt_resources
-    LEFT JOIN resources ON attempt_resources.resource_id = resources.resource_id
-    WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
-    ON DUPLICATE KEY UPDATE `usage` = `usage` + msec_diff * quantity;
-
-    INSERT INTO aggregated_job_resources (batch_id, job_id, resource, `usage`)
-    SELECT batch_id, job_id, resources.resource, msec_diff * quantity
-    FROM attempt_resources
-    LEFT JOIN resources ON attempt_resources.resource_id = resources.resource_id
-    WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
-    ON DUPLICATE KEY UPDATE `usage` = `usage` + msec_diff * quantity;
-  END IF;
 
   IF msec_diff_rollup != 0 THEN
     INSERT INTO aggregated_billing_project_user_resources_v2 (billing_project, user, resource_id, token, `usage`)
@@ -533,8 +538,23 @@ BEGIN
     WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
     ON DUPLICATE KEY UPDATE `usage` = `usage` + msec_diff_rollup * quantity;
 
+    INSERT INTO aggregated_billing_project_user_resources_v3 (billing_project, user, resource_id, token, `usage`)
+    SELECT batches.billing_project, batches.`user`,
+      attempt_resources.resource_id,
+      rand_token,
+      msec_diff_rollup * quantity
+    FROM attempt_resources
+    JOIN batches ON batches.id = attempt_resources.batch_id
+    INNER JOIN aggregated_billing_project_user_resources_v2 ON
+      aggregated_billing_project_user_resources_v2.billing_project = batches.billing_project AND
+      aggregated_billing_project_user_resources_v2.user = batches.user AND
+      aggregated_billing_project_user_resources_v2.resource_id = attempt_resources.resource_id AND
+      aggregated_billing_project_user_resources_v2.token = rand_token
+    WHERE attempt_resources.batch_id = NEW.batch_id AND attempt_resources.job_id = NEW.job_id AND attempt_id = NEW.attempt_id AND migrated = 1
+    ON DUPLICATE KEY UPDATE `usage` = aggregated_billing_project_user_resources_v3.`usage` + msec_diff_rollup * quantity;
+
     INSERT INTO aggregated_batch_resources_v2 (batch_id, resource_id, token, `usage`)
-    SELECT attempt_resources.batch_id,
+    SELECT batch_id,
       resource_id,
       rand_token,
       msec_diff_rollup * quantity
@@ -542,13 +562,38 @@ BEGIN
     WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
     ON DUPLICATE KEY UPDATE `usage` = `usage` + msec_diff_rollup * quantity;
 
+    INSERT INTO aggregated_batch_resources_v3 (batch_id, resource_id, token, `usage`)
+    SELECT attempt_resources.batch_id,
+      attempt_resources.resource_id,
+      rand_token,
+      msec_diff_rollup * quantity
+    FROM attempt_resources
+    JOIN aggregated_batch_resources_v2 ON
+      aggregated_batch_resources_v2.batch_id = attempt_resources.batch_id AND
+      aggregated_batch_resources_v2.resource_id = attempt_resources.resource_id AND
+      aggregated_batch_resources_v2.token = rand_token
+    WHERE attempt_resources.batch_id = NEW.batch_id AND attempt_resources.job_id = NEW.job_id AND attempt_id = NEW.attempt_id AND migrated = 1
+    ON DUPLICATE KEY UPDATE `usage` = aggregated_batch_resources_v3.`usage` + msec_diff_rollup * quantity;
+
     INSERT INTO aggregated_job_resources_v2 (batch_id, job_id, resource_id, `usage`)
-    SELECT attempt_resources.batch_id, attempt_resources.job_id,
+    SELECT batch_id, job_id,
       resource_id,
       msec_diff_rollup * quantity
     FROM attempt_resources
     WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
     ON DUPLICATE KEY UPDATE `usage` = `usage` + msec_diff_rollup * quantity;
+
+    INSERT INTO aggregated_job_resources_v3 (batch_id, job_id, resource_id, `usage`)
+    SELECT attempt_resources.batch_id, attempt_resources.job_id,
+      attempt_resources.resource_id,
+      msec_diff_rollup * quantity
+    FROM attempt_resources
+    JOIN aggregated_job_resources_v2 ON
+      aggregated_job_resources_v2.batch_id = attempt_resources.batch_id AND
+      aggregated_job_resources_v2.job_id = attempt_resources.job_id AND
+      aggregated_job_resources_v2.resource_id = attempt_resources.resource_id
+    WHERE attempt_resources.batch_id = NEW.batch_id AND attempt_resources.job_id = NEW.job_id AND attempt_id = NEW.attempt_id AND migrated = 1
+    ON DUPLICATE KEY UPDATE `usage` = aggregated_job_resources_v3.`usage` + msec_diff_rollup * quantity;
 
     INSERT INTO aggregated_billing_project_user_resources_by_date_v2 (billing_date, billing_project, user, resource_id, token, `usage`)
     SELECT cur_billing_date,
@@ -561,6 +606,24 @@ BEGIN
     JOIN batches ON batches.id = attempt_resources.batch_id
     WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
     ON DUPLICATE KEY UPDATE `usage` = `usage` + msec_diff_rollup * quantity;
+
+    INSERT INTO aggregated_billing_project_user_resources_by_date_v3 (billing_date, billing_project, user, resource_id, token, `usage`)
+    SELECT cur_billing_date,
+      batches.billing_project,
+      batches.`user`,
+      attempt_resources.resource_id,
+      rand_token,
+      msec_diff_rollup * quantity
+    FROM attempt_resources
+    JOIN batches ON batches.id = attempt_resources.batch_id
+    JOIN aggregated_billing_project_user_resources_by_date_v2 ON
+      aggregated_billing_project_user_resources_by_date_v2.billing_date = cur_billing_date AND
+      aggregated_billing_project_user_resources_by_date_v2.billing_project = batches.billing_project AND
+      aggregated_billing_project_user_resources_by_date_v2.user = batches.user AND
+      aggregated_billing_project_user_resources_by_date_v2.resource_id = attempt_resources.resource_id AND
+      aggregated_billing_project_user_resources_by_date_v2.token = rand_token
+    WHERE attempt_resources.batch_id = NEW.batch_id AND attempt_resources.job_id = NEW.job_id AND attempt_id = NEW.attempt_id AND migrated = 1
+    ON DUPLICATE KEY UPDATE `usage` = aggregated_billing_project_user_resources_by_date_v3.`usage` + msec_diff_rollup * quantity;
   END IF;
 END $$
 
@@ -739,15 +802,16 @@ FOR EACH ROW
 BEGIN
   DECLARE cur_start_time BIGINT;
   DECLARE cur_rollup_time BIGINT;
-  DECLARE cur_end_time BIGINT;
   DECLARE cur_billing_project VARCHAR(100);
   DECLARE cur_user VARCHAR(100);
-  DECLARE msec_diff BIGINT;
   DECLARE msec_diff_rollup BIGINT;
   DECLARE cur_n_tokens INT;
   DECLARE rand_token INT;
-  DECLARE cur_resource VARCHAR(100);
   DECLARE cur_billing_date DATE;
+  DECLARE bp_user_resources_migrated BOOLEAN DEFAULT FALSE;
+  DECLARE bp_user_resources_by_date_migrated BOOLEAN DEFAULT FALSE;
+  DECLARE batch_resources_migrated BOOLEAN DEFAULT FALSE;
+  DECLARE job_resources_migrated BOOLEAN DEFAULT FALSE;
 
   SELECT billing_project, user INTO cur_billing_project, cur_user
   FROM batches WHERE id = NEW.batch_id;
@@ -755,34 +819,14 @@ BEGIN
   SELECT n_tokens INTO cur_n_tokens FROM globals LOCK IN SHARE MODE;
   SET rand_token = FLOOR(RAND() * cur_n_tokens);
 
-  SELECT resource INTO cur_resource FROM resources WHERE resource_id = NEW.resource_id;
-
-  SELECT start_time, end_time, rollup_time INTO cur_start_time, cur_end_time, cur_rollup_time
+  SELECT start_time, rollup_time INTO cur_start_time, cur_rollup_time
   FROM attempts
   WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND attempt_id = NEW.attempt_id
   LOCK IN SHARE MODE;
 
-  SET msec_diff = GREATEST(COALESCE(cur_end_time - cur_start_time, 0), 0);
   SET msec_diff_rollup = GREATEST(COALESCE(cur_rollup_time - cur_start_time, 0), 0);
 
   SET cur_billing_date = CAST(UTC_DATE() AS DATE);
-
-  IF msec_diff != 0 THEN
-    INSERT INTO aggregated_billing_project_resources (billing_project, resource, token, `usage`)
-    VALUES (cur_billing_project, cur_resource, rand_token, NEW.quantity * msec_diff)
-    ON DUPLICATE KEY UPDATE
-      `usage` = `usage` + NEW.quantity * msec_diff;
-
-    INSERT INTO aggregated_batch_resources (batch_id, resource, token, `usage`)
-    VALUES (NEW.batch_id, cur_resource, rand_token, NEW.quantity * msec_diff)
-    ON DUPLICATE KEY UPDATE
-      `usage` = `usage` + NEW.quantity * msec_diff;
-
-    INSERT INTO aggregated_job_resources (batch_id, job_id, resource, `usage`)
-    VALUES (NEW.batch_id, NEW.job_id, cur_resource, NEW.quantity * msec_diff)
-    ON DUPLICATE KEY UPDATE
-      `usage` = `usage` + NEW.quantity * msec_diff;
-  END IF;
 
   IF msec_diff_rollup != 0 THEN
     INSERT INTO aggregated_billing_project_user_resources_v2 (billing_project, user, resource_id, token, `usage`)
@@ -790,22 +834,157 @@ BEGIN
     ON DUPLICATE KEY UPDATE
       `usage` = `usage` + NEW.quantity * msec_diff_rollup;
 
+    SELECT migrated INTO bp_user_resources_migrated
+    FROM aggregated_billing_project_user_resources_v2
+    WHERE billing_project = cur_billing_project AND user = cur_user AND resource_id = NEW.resource_id AND token = rand_token;
+
+    IF bp_user_resources_migrated THEN
+      INSERT INTO aggregated_billing_project_user_resources_v3 (billing_project, user, resource_id, token, `usage`)
+      VALUES (cur_billing_project, cur_user, NEW.deduped_resource_id, rand_token, NEW.quantity * msec_diff_rollup)
+      ON DUPLICATE KEY UPDATE
+        `usage` = `usage` + NEW.quantity * msec_diff_rollup;
+    END IF;
+
     INSERT INTO aggregated_batch_resources_v2 (batch_id, resource_id, token, `usage`)
     VALUES (NEW.batch_id, NEW.resource_id, rand_token, NEW.quantity * msec_diff_rollup)
     ON DUPLICATE KEY UPDATE
       `usage` = `usage` + NEW.quantity * msec_diff_rollup;
+
+    SELECT migrated INTO batch_resources_migrated
+    FROM aggregated_batch_resources_v2
+    WHERE batch_id = NEW.batch_id AND resource_id = NEW.resource_id AND token = rand_token;
+
+    IF batch_resources_migrated THEN
+      INSERT INTO aggregated_batch_resources_v3 (batch_id, resource_id, token, `usage`)
+      VALUES (NEW.batch_id, NEW.deduped_resource_id, rand_token, NEW.quantity * msec_diff_rollup)
+      ON DUPLICATE KEY UPDATE
+        `usage` = `usage` + NEW.quantity * msec_diff_rollup;
+    END IF;
 
     INSERT INTO aggregated_job_resources_v2 (batch_id, job_id, resource_id, `usage`)
     VALUES (NEW.batch_id, NEW.job_id, NEW.resource_id, NEW.quantity * msec_diff_rollup)
     ON DUPLICATE KEY UPDATE
       `usage` = `usage` + NEW.quantity * msec_diff_rollup;
 
-    IF cur_billing_date IS NOT NULL THEN
-      INSERT INTO aggregated_billing_project_user_resources_by_date_v2 (billing_date, billing_project, user, resource_id, token, `usage`)
-      VALUES (cur_billing_date, cur_billing_project, cur_user, NEW.resource_id, rand_token, NEW.quantity * msec_diff_rollup)
+    SELECT migrated INTO job_resources_migrated
+    FROM aggregated_job_resources_v2
+    WHERE batch_id = NEW.batch_id AND job_id = NEW.job_id AND resource_id = NEW.resource_id AND token = rand_token;
+
+    IF job_resources_migrated THEN
+      INSERT INTO aggregated_job_resources_v3 (batch_id, job_id, resource_id, `usage`)
+      VALUES (NEW.batch_id, NEW.job_id, NEW.deduped_resource_id, NEW.quantity * msec_diff_rollup)
       ON DUPLICATE KEY UPDATE
         `usage` = `usage` + NEW.quantity * msec_diff_rollup;
     END IF;
+
+    INSERT INTO aggregated_billing_project_user_resources_by_date_v2 (billing_date, billing_project, user, resource_id, token, `usage`)
+    VALUES (cur_billing_date, cur_billing_project, cur_user, NEW.resource_id, rand_token, NEW.quantity * msec_diff_rollup)
+    ON DUPLICATE KEY UPDATE
+      `usage` = `usage` + NEW.quantity * msec_diff_rollup;
+
+    SELECT migrated INTO bp_user_resources_by_date_migrated
+    FROM aggregated_billing_project_user_resources_by_date_v2
+    WHERE billing_date = cur_billing_date AND billing_project = cur_billing_project AND user = cur_user
+      AND resource_id = NEW.resource_id AND token = rand_token;
+
+    IF bp_user_resources_by_date_migrated THEN
+      INSERT INTO aggregated_billing_project_user_resources_by_date_v3 (billing_date, billing_project, user, resource_id, token, `usage`)
+      VALUES (cur_billing_date, cur_billing_project, cur_user, NEW.deduped_resource_id, rand_token, NEW.quantity * msec_diff_rollup)
+      ON DUPLICATE KEY UPDATE
+        `usage` = `usage` + NEW.quantity * msec_diff_rollup;
+    END IF;
+  END IF;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_bp_user_resources_v2_before_insert $$
+CREATE TRIGGER aggregated_bp_user_resources_v2_before_insert BEFORE INSERT ON aggregated_billing_project_user_resources_v2
+FOR EACH ROW
+BEGIN
+  SET NEW.migrated = 1;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_bp_user_resources_by_date_v2_before_insert $$
+CREATE TRIGGER aggregated_bp_user_resources_by_date_v2_before_insert BEFORE INSERT ON aggregated_billing_project_user_resources_by_date_v2
+FOR EACH ROW
+BEGIN
+  SET NEW.migrated = 1;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_batch_resources_v2_before_insert $$
+CREATE TRIGGER aggregated_batch_resources_v2_before_insert BEFORE INSERT on aggregated_batch_resources_v2
+FOR EACH ROW
+BEGIN
+  SET NEW.migrated = 1;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_job_resources_v2_before_insert $$
+CREATE TRIGGER aggregated_job_resources_v2_before_insert BEFORE INSERT on aggregated_job_resources_v2
+FOR EACH ROW
+BEGIN
+  SET NEW.migrated = 1;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_bp_user_resources_v2_after_update $$
+CREATE TRIGGER aggregated_bp_user_resources_v2_after_update AFTER UPDATE ON aggregated_billing_project_user_resources_v2
+FOR EACH ROW
+BEGIN
+  DECLARE new_deduped_resource_id INT;
+
+  IF OLD.migrated = 0 AND NEW.migrated = 1 THEN
+    SELECT deduped_resource_id INTO new_deduped_resource_id FROM resources WHERE resource_id = OLD.resource_id;
+
+    INSERT INTO aggregated_billing_project_user_resources_v3 (billing_project, user, resource_id, token, `usage`)
+    VALUES (NEW.billing_project, NEW.user, new_deduped_resource_id, NEW.token, NEW.usage)
+    ON DUPLICATE KEY UPDATE
+      `usage` = `usage` + NEW.usage;
+  END IF;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_bp_user_resources_by_date_v2_after_update $$
+CREATE TRIGGER aggregated_bp_user_resources_by_date_v2_after_update AFTER UPDATE ON aggregated_billing_project_user_resources_by_date_v2
+FOR EACH ROW
+BEGIN
+  DECLARE new_deduped_resource_id INT;
+
+  IF OLD.migrated = 0 AND NEW.migrated = 1 THEN
+    SELECT deduped_resource_id INTO new_deduped_resource_id FROM resources WHERE resource_id = OLD.resource_id;
+
+    INSERT INTO aggregated_billing_project_user_resources_by_date_v3 (billing_date, billing_project, user, resource_id, token, `usage`)
+    VALUES (NEW.billing_date, NEW.billing_project, NEW.user, new_deduped_resource_id, NEW.token, NEW.usage)
+    ON DUPLICATE KEY UPDATE
+        `usage` = `usage` + NEW.usage;
+  END IF;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_batch_resources_v2_after_update $$
+CREATE TRIGGER aggregated_batch_resources_v2_after_update AFTER UPDATE ON aggregated_batch_resources_v2
+FOR EACH ROW
+BEGIN
+  DECLARE new_deduped_resource_id INT;
+
+  IF OLD.migrated = 0 AND NEW.migrated = 1 THEN
+    SELECT deduped_resource_id INTO new_deduped_resource_id FROM resources WHERE resource_id = OLD.resource_id;
+
+    INSERT INTO aggregated_batch_resources_v3 (batch_id, resource_id, token, `usage`)
+    VALUES (NEW.batch_id, new_deduped_resource_id, NEW.token, NEW.usage)
+    ON DUPLICATE KEY UPDATE
+      `usage` = `usage` + NEW.usage;
+  END IF;
+END $$
+
+DROP TRIGGER IF EXISTS aggregated_job_resources_v2_after_update $$
+CREATE TRIGGER aggregated_job_resources_v2_after_update AFTER UPDATE ON aggregated_job_resources_v2
+FOR EACH ROW
+BEGIN
+  DECLARE new_deduped_resource_id INT;
+
+  IF OLD.migrated = 0 AND NEW.migrated = 1 THEN
+    SELECT deduped_resource_id INTO new_deduped_resource_id FROM resources WHERE resource_id = OLD.resource_id;
+
+    INSERT INTO aggregated_job_resources_v3 (batch_id, job_id, resource_id, `usage`)
+    VALUES (NEW.batch_id, NEW.job_id, new_deduped_resource_id, NEW.usage)
+    ON DUPLICATE KEY UPDATE
+      `usage` = `usage` + NEW.usage;
   END IF;
 END $$
 

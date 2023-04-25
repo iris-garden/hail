@@ -1,6 +1,7 @@
 import hail as hl
 import scipy.stats as spst
 import pytest
+from ..helpers import resource
 
 
 def test_deprecated_binom_test():
@@ -35,3 +36,52 @@ def test_pchisqtail():
 
 def test_shuffle():
     assert set(hl.eval(hl.shuffle(hl.range(5)))) == set(range(5))
+
+
+def test_pgenchisq():
+    ht = hl.import_table(
+        resource('davies-genchisq-tests.tsv'),
+        types={
+            'c': hl.tfloat64,
+            'weights': hl.tarray(hl.tfloat64),
+            'k': hl.tarray(hl.tint32),
+            'lam': hl.tarray(hl.tfloat64),
+            'sigma': hl.tfloat64,
+            'lim': hl.tint32,
+            'acc': hl.tfloat64,
+            'expected': hl.tfloat64,
+            'expected_n_iterations': hl.tint32
+        }
+    )
+    ht = ht.add_index('line_number')
+    ht = ht.annotate(line_number = ht.line_number + 1)
+    ht = ht.annotate(genchisq_result = hl.pgenchisq(
+       ht.c, ht.weights, ht.k, ht.lam, 0.0, ht.sigma, max_iterations=ht.lim, min_accuracy=ht.acc
+    ))
+    tests = ht.collect()
+    for test in tests:
+        assert abs(test.genchisq_result.value - test.expected) < 0.0000005, str(test)
+        assert test.genchisq_result.fault == 0, str(test)
+        assert test.genchisq_result.converged == True, str(test)
+        assert test.genchisq_result.n_iterations == test.expected_n_iterations, str(test)
+
+
+def test_array():
+    actual = hl.eval((
+        hl.array(hl.array([1, 2, 3, 3])),
+        hl.array(hl.set([1, 2, 3])),
+        hl.array(hl.dict({1: 5, 7: 4})),
+        hl.array(hl.nd.array([1, 2, 3, 3])),
+    ))
+
+    expected = (
+        [1, 2, 3, 3],
+        [1, 2, 3],
+        [(1, 5), (7, 4)],
+        [1, 2, 3, 3]
+    )
+
+    assert actual == expected
+
+    with pytest.raises(ValueError, match='array: only one dimensional ndarrays are supported: ndarray<float64, 2>'):
+        hl.eval(hl.array(hl.nd.array([[1.0], [2.0]])))

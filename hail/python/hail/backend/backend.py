@@ -1,10 +1,23 @@
-from typing import Mapping, List, Union, Tuple, Dict, Optional, Any
+from typing import Mapping, List, Union, TypeVar, Tuple, Dict, Optional, Any, AbstractSet
 import abc
-from ..fs.fs import FS
+import orjson
+import pkg_resources
+import zipfile
+
+from hailtop.config.user_config import configuration_of
+from hailtop.fs.fs import FS
+
+from ..builtin_references import BUILTIN_REFERENCE_RESOURCE_PATHS
 from ..expr import Expression
 from ..expr.types import HailType
 from ..ir import BaseIR
-from ..utils.java import FatalError, HailUserError
+from ..linalg.blockmatrix import BlockMatrix
+from ..matrixtable import MatrixTable
+from ..table import Table
+from ..utils.java import FatalError
+
+
+Dataset = TypeVar('Dataset', Table, MatrixTable, BlockMatrix)
 
 
 def fatal_error_from_java_error_triplet(short_message, expanded_message, error_id):
@@ -21,8 +34,45 @@ Error summary: {short_message}''',
 
 
 class Backend(abc.ABC):
+    # Must match knownFlags in HailFeatureFlags.py
+    _flags_env_vars_and_defaults: Dict[str, Tuple[str, Optional[str]]] = {
+        "no_whole_stage_codegen": ("HAIL_DEV_NO_WHOLE_STAGE_CODEGEN", None),
+        "no_ir_logging": ("HAIL_DEV_NO_IR_LOG", None),
+        "lower": ("HAIL_DEV_LOWER", None),
+        "lower_only": ("HAIL_DEV_LOWER_ONLY", None),
+        "lower_bm": ("HAIL_DEV_LOWER_BM", None),
+        "print_ir_on_worker": ("HAIL_DEV_PRINT_IR_ON_WORKER", None),
+        "print_inputs_on_worker": ("HAIL_DEV_PRINT_INPUTS_ON_WORKER", None),
+        "max_leader_scans": ("HAIL_DEV_MAX_LEADER_SCANS", "1000"),
+        "distributed_scan_comb_op": ("HAIL_DEV_DISTRIBUTED_SCAN_COMB_OP", None),
+        "jvm_bytecode_dump": ("HAIL_DEV_JVM_BYTECODE_DUMP", None),
+        "write_ir_files": ("HAIL_WRITE_IR_FILES", None),
+        "method_split_ir_limit": ("HAIL_DEV_METHOD_SPLIT_LIMIT", "16"),
+        "use_new_shuffle": ("HAIL_USE_NEW_SHUFFLE", None),
+        "shuffle_max_branch_factor": ("HAIL_SHUFFLE_MAX_BRANCH", "64"),
+        "shuffle_cutoff_to_local_sort": ("HAIL_SHUFFLE_CUTOFF", "512000000"),  # This is in bytes
+        "grouped_aggregate_buffer_size": ("HAIL_GROUPED_AGGREGATE_BUFFER_SIZE", "50"),
+        "use_ssa_logs": ("HAIL_USE_SSA_LOGS", None),
+        "gcs_requester_pays_project": ("HAIL_GCS_REQUESTER_PAYS_PROJECT", None),
+        "gcs_requester_pays_buckets": ("HAIL_GCS_REQUESTER_PAYS_BUCKETS", None),
+        "index_branching_factor": ("HAIL_INDEX_BRANCHING_FACTOR", None),
+        "rng_nonce": ("HAIL_RNG_NONCE", "0x0")
+    }
+
+    def _valid_flags(self) -> AbstractSet[str]:
+        return self._flags_env_vars_and_defaults.keys()
+
+    @abc.abstractmethod
+    def __init__(self):
+        self._persisted_locations = dict()
+        self._references = {}
+
     @abc.abstractmethod
     def stop(self):
+        pass
+
+    @abc.abstractmethod
+    def validate_file_scheme(self, url):
         pass
 
     @abc.abstractmethod
@@ -31,14 +81,6 @@ class Backend(abc.ABC):
 
     @abc.abstractmethod
     async def _async_execute(self, ir, timed=False):
-        pass
-
-    def execute_many(self, *irs, timed=False):
-        from ..ir import MakeTuple  # pylint: disable=import-outside-toplevel
-        return [self.execute(MakeTuple([ir]), timed=timed)[0] for ir in irs]
-
-    @abc.abstractmethod
-    async def _async_execute_many(self, *irs, timed=False):
         pass
 
     @abc.abstractmethod
@@ -54,10 +96,6 @@ class Backend(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def add_reference(self, config):
-        pass
-
-    @abc.abstractmethod
     def load_references_from_dataset(self, path):
         pass
 
@@ -65,23 +103,29 @@ class Backend(abc.ABC):
     def from_fasta_file(self, name, fasta_file, index_file, x_contigs, y_contigs, mt_contigs, par):
         pass
 
-    @abc.abstractmethod
-    def remove_reference(self, name):
+    def add_reference(self, rg):
+        self._references[rg.name] = rg
+        self._add_reference_to_scala_backend(rg)
+
+    def _add_reference_to_scala_backend(self, rg):
         pass
 
-    @abc.abstractmethod
     def get_reference(self, name):
-        pass
+        return self._references[name]
 
-    @abc.abstractmethod
-    async def _async_get_reference(self, name):
-        pass
+    def initialize_references(self):
+        from hail.genetics.reference_genome import ReferenceGenome
+        jar_path = pkg_resources.resource_filename(__name__, 'hail-all-spark.jar')
+        for path_in_jar in BUILTIN_REFERENCE_RESOURCE_PATHS.values():
+            rg_config = orjson.loads(zipfile.ZipFile(jar_path).open(path_in_jar).read())
+            rg = ReferenceGenome._from_config(rg_config, _builtin=True)
+            self._references[rg.name] = rg
 
-    def get_references(self, names):
-        return [self.get_reference(name) for name in names]
+    def remove_reference(self, name):
+        del self._references[name]
+        self._remove_reference_from_scala_backend(name)
 
-    @abc.abstractmethod
-    async def _async_get_references(self, names):
+    def _remove_reference_from_scala_backend(self, name):
         pass
 
     @abc.abstractmethod
@@ -115,33 +159,22 @@ class Backend(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def index_bgen(self,
-                   files: List[str],
-                   index_file_map: Dict[str, str],
-                   referenceGenomeName: Optional[str],
-                   contig_recoding: Dict[str, str],
-                   skip_invalid_loci: bool):
-        pass
-
-    @abc.abstractmethod
     def import_fam(self, path: str, quant_pheno: bool, delimiter: str, missing: str):
         pass
 
-    def persist_table(self, t, storage_level):
-        # FIXME: this can't possibly be right.
-        return t
+    def persist(self, dataset: Dataset) -> Dataset:
+        from hail.context import TemporaryFilename
+        tempfile = TemporaryFilename(prefix=f'persist_{type(dataset).__name__}')
+        persisted = dataset.checkpoint(tempfile.__enter__())
+        self._persisted_locations[persisted] = (tempfile, dataset)
+        return persisted
 
-    def unpersist_table(self, t):
-        return t
-
-    def persist_matrix_table(self, mt, storage_level):
-        return mt
-
-    def unpersist_matrix_table(self, mt):
-        return mt
-
-    def unpersist_block_matrix(self, id):
-        pass
+    def unpersist(self, dataset: Dataset) -> Dataset:
+        tempfile, unpersisted = self._persisted_locations.pop(dataset, (None, None))
+        if tempfile is None:
+            return dataset
+        tempfile.__exit__(None, None, None)
+        return unpersisted
 
     @abc.abstractmethod
     def register_ir_function(self,
@@ -154,8 +187,18 @@ class Backend(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def _is_registered_ir_function_name(self, name: str) -> bool:
+        pass
+
+    @abc.abstractmethod
     def persist_expression(self, expr: Expression) -> Expression:
         pass
+
+    def _initialize_flags(self) -> None:
+        self.set_flags(**{
+            k: configuration_of('query', k, None, default, deprecated_envvar=deprecated_envvar)
+            for k, (deprecated_envvar, default) in Backend._flags_env_vars_and_defaults.items()
+        })
 
     @abc.abstractmethod
     def set_flags(self, **flags: Mapping[str, str]):
@@ -171,19 +214,3 @@ class Backend(abc.ABC):
     @abc.abstractmethod
     def requires_lowering(self):
         pass
-
-    def _handle_fatal_error_from_backend(self, err: FatalError, ir: BaseIR):
-        if err._error_id is None:
-            raise err
-
-        error_sources = ir.base_search(lambda x: x._error_id == err._error_id)
-        if len(error_sources) == 0:
-            raise err
-
-        better_stack_trace = error_sources[0]._stack_trace
-        error_message = str(err)
-        message_and_trace = (f'{error_message}\n'
-                             '------------\n'
-                             'Hail stack trace:\n'
-                             f'{better_stack_trace}')
-        raise HailUserError(message_and_trace) from None

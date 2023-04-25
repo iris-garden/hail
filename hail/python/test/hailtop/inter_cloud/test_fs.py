@@ -1,4 +1,5 @@
 from typing import Tuple, AsyncIterator
+import datetime
 import random
 import functools
 import os
@@ -14,18 +15,19 @@ from hailtop.aiocloud.aioazure import AzureAsyncFS
 from hailtop.aiocloud.aiogoogle import GoogleStorageAsyncFS
 
 
-@pytest.fixture(params=['file', 'gs', 's3', 'hail-az', 'router/file', 'router/gs', 'router/s3', 'router/hail-az'])
+@pytest.fixture(params=['file', 'gs', 's3', 'azure-https', 'router/file', 'router/gs', 'router/s3', 'router/azure-https'])
 async def filesystem(request) -> AsyncIterator[Tuple[asyncio.Semaphore, AsyncFS, str]]:
     token = secret_alnum_string()
 
     with ThreadPoolExecutor() as thread_pool:
         fs: AsyncFS
         if request.param.startswith('router/'):
-            fs = RouterAsyncFS(
-                'file', filesystems=[LocalAsyncFS(thread_pool),
-                                     GoogleStorageAsyncFS(),
-                                     S3AsyncFS(thread_pool),
-                                     AzureAsyncFS()])
+            fs = RouterAsyncFS(filesystems=[
+                LocalAsyncFS(thread_pool),
+                GoogleStorageAsyncFS(),
+                S3AsyncFS(thread_pool),
+                AzureAsyncFS()
+            ])
         elif request.param == 'file':
             fs = LocalAsyncFS(thread_pool)
         elif request.param.endswith('gs'):
@@ -33,7 +35,7 @@ async def filesystem(request) -> AsyncIterator[Tuple[asyncio.Semaphore, AsyncFS,
         elif request.param.endswith('s3'):
             fs = S3AsyncFS(thread_pool)
         else:
-            assert request.param.endswith('hail-az')
+            assert request.param.endswith('azure-https')
             fs = AzureAsyncFS()
         async with fs:
             if request.param.endswith('file'):
@@ -45,10 +47,10 @@ async def filesystem(request) -> AsyncIterator[Tuple[asyncio.Semaphore, AsyncFS,
                 bucket = os.environ['HAIL_TEST_S3_BUCKET']
                 base = f's3://{bucket}/tmp/{token}/'
             else:
-                assert request.param.endswith('hail-az')
+                assert request.param.endswith('azure-https')
                 account = os.environ['HAIL_TEST_AZURE_ACCOUNT']
                 container = os.environ['HAIL_TEST_AZURE_CONTAINER']
-                base = f'hail-az://{account}/{container}/tmp/{token}/'
+                base = f'https://{account}.blob.core.windows.net/{container}/tmp/{token}/'
 
             await fs.mkdir(base)
             sema = asyncio.Semaphore(50)
@@ -471,6 +473,37 @@ async def test_statfile(filesystem: Tuple[asyncio.Semaphore, AsyncFS, str]):
     status = await fs.statfile(file)
     assert await status.size() == n
 
+
+@pytest.mark.asyncio
+async def test_statfile_creation_and_modified_time(filesystem: Tuple[asyncio.Semaphore, AsyncFS, str]):
+    _, fs, base = filesystem
+
+    file = f'{base}bar'
+    now = datetime.datetime.utcnow()
+    await fs.write(file, b'abc123')
+    status = await fs.statfile(file)
+
+    if isinstance(fs, RouterAsyncFS):
+        is_local = isinstance(fs._get_fs(file), LocalAsyncFS)
+    else:
+        is_local = isinstance(fs, LocalAsyncFS)
+
+
+    if is_local:
+        try:
+            status.time_created()
+        except ValueError as err:
+            assert err.args[0] == 'LocalFS does not support time created.'
+        else:
+            assert False
+
+        modified_time = status.time_modified()
+        assert modified_time.timestamp() == pytest.approx(now.timestamp(), abs=60)
+    else:
+        create_time = status.time_created()
+        assert create_time.timestamp() == pytest.approx(now.timestamp(), abs=60)
+        modified_time = status.time_modified()
+        assert modified_time == create_time
 
 @pytest.mark.asyncio
 async def test_file_can_contain_url_query_delimiter(filesystem: Tuple[asyncio.Semaphore, AsyncFS, str]):

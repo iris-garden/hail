@@ -3,6 +3,7 @@ from types import TracebackType
 import abc
 import io
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 import janus
 from hailtop.utils import blocking_to_async
@@ -17,12 +18,23 @@ class ReadableStream(abc.ABC):
 
     # Read at most up to n bytes. If n == -1, then
     # return all bytes up to the end of the file
+    @abc.abstractmethod
     async def read(self, n: int = -1) -> bytes:
         raise NotImplementedError
 
     # Read exactly n bytes. If there is an EOF before
     # n bytes have been read, raise an UnexpectedEOFError.
+    @abc.abstractmethod
     async def readexactly(self, n: int) -> bytes:
+        raise NotImplementedError
+
+    async def seek(self, offset, whence):
+        raise OSError
+
+    def seekable(self):
+        return False
+
+    def tell(self) -> int:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -124,6 +136,15 @@ class _ReadableStreamFromBlocking(ReadableStream):
             return await blocking_to_async(self._thread_pool, self._f.read)
         return await blocking_to_async(self._thread_pool, self._f.read, n)
 
+    async def seek(self, offset, whence):
+        self._f.seek(offset, whence)
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self._f.tell()
+
     def _readexactly(self, n: int) -> bytes:
         assert n >= 0
         data: List[bytes] = []
@@ -151,6 +172,7 @@ class _WritableStreamFromBlocking(WritableStream):
         super().__init__()
         self._thread_pool = thread_pool
         self._f = f
+        self._start = f.tell()
 
     def writable(self) -> bool:
         return self._f.writable()
@@ -161,6 +183,8 @@ class _WritableStreamFromBlocking(WritableStream):
     async def _wait_closed(self) -> None:
         await blocking_to_async(self._thread_pool, self._f.flush)
         await blocking_to_async(self._thread_pool, os.fsync, self._f.fileno())
+        if sys.platform == 'linux':
+            os.posix_fadvise(self._f.fileno(), self._start, self._f.tell() - self._start, os.POSIX_FADV_DONTNEED)
         await blocking_to_async(self._thread_pool, self._f.close)
         del self._f
 

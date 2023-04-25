@@ -3,7 +3,8 @@ package is.hail.expr.ir
 import is.hail.asm4s.{HailClassLoader, theHailClassLoaderForSparkWorkers}
 import is.hail.HailContext
 import is.hail.annotations._
-import is.hail.backend.{BroadcastValue, ExecuteContext}
+import is.hail.backend.spark.SparkTaskContext
+import is.hail.backend.{BroadcastValue, ExecuteContext, HailTaskContext}
 import is.hail.expr.TableAnnotationImpex
 import is.hail.expr.ir.lowering.{RVDToTableStage, TableStage, TableStageToRVD}
 import is.hail.io.fs.FS
@@ -36,7 +37,7 @@ sealed trait TableExecuteIntermediate {
   def partitioner: RVDPartitioner
 }
 
-class TableValueIntermediate(tv: TableValue) extends TableExecuteIntermediate {
+case class TableValueIntermediate(tv: TableValue) extends TableExecuteIntermediate {
   def asTableStage(ctx: ExecuteContext): TableStage = {
     RVDToTableStage(tv.rvd, tv.globals.toEncodedLiteral(ctx.theHailClassLoader))
   }
@@ -46,11 +47,11 @@ class TableValueIntermediate(tv: TableValue) extends TableExecuteIntermediate {
   def partitioner: RVDPartitioner = tv.rvd.partitioner
 }
 
-class TableStageIntermediate(ts: TableStage) extends TableExecuteIntermediate {
+case class TableStageIntermediate(ts: TableStage) extends TableExecuteIntermediate {
   def asTableStage(ctx: ExecuteContext): TableStage = ts
 
   def asTableValue(ctx: ExecuteContext): TableValue = {
-    val (globals, rvd) = TableStageToRVD(ctx, ts, Map.empty)
+    val (globals, rvd) = TableStageToRVD(ctx, ts)
     TableValue(ctx, TableType(ts.rowType, ts.key, ts.globalType), globals, rvd)
   }
 
@@ -97,13 +98,13 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
   def persist(ctx: ExecuteContext, level: StorageLevel) =
     TableValue(ctx, typ, globals, rvd.persist(ctx, level))
 
-  def filterWithPartitionOp[P](theHailClassLoader: HailClassLoader, fs: BroadcastValue[FS], partitionOp: (HailClassLoader, FS, Int, Region) => P)(pred: (P, RVDContext, Long, Long) => Boolean): TableValue = {
+  def filterWithPartitionOp[P](theHailClassLoader: HailClassLoader, fs: BroadcastValue[FS], partitionOp: (HailClassLoader, FS, HailTaskContext, Region) => P)(pred: (P, RVDContext, Long, Long) => Boolean): TableValue = {
     val localGlobals = globals.broadcast(theHailClassLoader)
     copy(rvd = rvd.filterWithContext[(P, Long)](
       { (partitionIdx, ctx) =>
         val globalRegion = ctx.partitionRegion
         (
-          partitionOp(theHailClassLoaderForSparkWorkers, fs.value, partitionIdx, globalRegion),
+          partitionOp(theHailClassLoaderForSparkWorkers, fs.value, SparkTaskContext.get(), globalRegion),
           localGlobals.value.readRegionValue(globalRegion, theHailClassLoaderForSparkWorkers)
         )
       }, { case ((p, glob), ctx, ptr) => pred(p, ctx, ptr, glob) }))

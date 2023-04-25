@@ -22,16 +22,14 @@ class MatrixNativeWriter(MatrixWriter):
                       stage_locally=bool,
                       codec_spec=nullable(str),
                       partitions=nullable(str),
-                      partitions_type=nullable(hail_type),
-                      checkpoint_file=nullable(str))
-    def __init__(self, path, overwrite, stage_locally, codec_spec, partitions, partitions_type, checkpoint_file):
+                      partitions_type=nullable(hail_type))
+    def __init__(self, path, overwrite, stage_locally, codec_spec, partitions, partitions_type):
         self.path = path
         self.overwrite = overwrite
         self.stage_locally = stage_locally
         self.codec_spec = codec_spec
         self.partitions = partitions
         self.partitions_type = partitions_type
-        self.checkpoint_file = checkpoint_file
 
     def render(self):
         writer = {'name': 'MatrixNativeWriter',
@@ -40,8 +38,7 @@ class MatrixNativeWriter(MatrixWriter):
                   'stageLocally': self.stage_locally,
                   'codecSpecJSONStr': self.codec_spec,
                   'partitions': self.partitions,
-                  'partitionsTypeStr': self.partitions_type._parsable_string() if self.partitions_type is not None else None,
-                  'checkpointFile': self.checkpoint_file
+                  'partitionsTypeStr': self.partitions_type._parsable_string() if self.partitions_type is not None else None
                   }
         return escape_str(json.dumps(writer))
 
@@ -52,8 +49,7 @@ class MatrixNativeWriter(MatrixWriter):
             other.stage_locally == self.stage_locally and \
             other.codec_spec == self.codec_spec and \
             other.partitions == self.partitions and \
-            other.partitions_type == self.partitions_type and \
-            other.checkpoint_file == self.checkpoint_file
+            other.partitions_type == self.partitions_type
 
 
 class MatrixVCFWriter(MatrixWriter):
@@ -107,21 +103,24 @@ class MatrixGENWriter(MatrixWriter):
 
 
 class MatrixBGENWriter(MatrixWriter):
-    @typecheck_method(path=str, export_type=ExportType.checker)
-    def __init__(self, path, export_type):
+    @typecheck_method(path=str, export_type=ExportType.checker, compression_codec=str)
+    def __init__(self, path, export_type, compression_codec):
         self.path = path
         self.export_type = export_type
+        self.compression_codec = compression_codec
 
     def render(self):
         writer = {'name': 'MatrixBGENWriter',
                   'path': self.path,
-                  'exportType': self.export_type}
+                  'exportType': self.export_type,
+                  'compressionCodec': self.compression_codec}
         return escape_str(json.dumps(writer))
 
     def __eq__(self, other):
         return isinstance(other, MatrixBGENWriter) and \
             other.path == self.path and \
-            other.export_type == self.export_type
+            other.export_type == self.export_type and \
+            other.compression_codec == self.compression_codec
 
 
 class MatrixPLINKWriter(MatrixWriter):
