@@ -92,48 +92,76 @@
           <th>Cost</th>
         </tr>
       </thead>
-      <tbody>
-        {% for job in batch['jobs'] %}
-        <tr>
-          <td class="numeric-cell">
-            <a class="fill-td" href="{{ base_path }}/batches/{{ job['batch_id'] }}/jobs/{{ job['job_id'] }}">{{ job['job_id'] }}</a>
-          </td>
-          <td>
-            {% if 'name' in job and job['name'] is not none %}
-            {{ job['name'] }}
-            {% endif %}
-          </td>
-          <td>{{ job['state'] }}</td>
-          <td>
-            {% if 'exit_code' in job and job['exit_code'] is not none %}
-            {{ job['exit_code'] }}
-            {% endif %}
-          </td>
-          <td>
-            {% if 'duration' in job and job['duration'] is not none %}
-            {{ job['duration'] }}
-            {% endif %}
-          </td>
-          <td>
-            {% if 'cost' in job and job['cost'] is not none %}
-            {{ job['cost'] }}
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
+      <tbody id="batch-table-body"></tbody>
     </table>
   </div>
-  {% if last_job_id is not none %}
-  <form method="GET" action="{{ base_path }}/batches/{{ batch['id'] }}">
-    {% if q is not none %}
-    <input type="hidden" name="q" value="{{ q }}" />
-    {% endif %}
-    <input type="hidden" name="last_job_id" value="{{ last_job_id }}" />
-    <button>Next page</button>
-  </form>
-  {% endif %}
+  <button id="next-page" onclick="nextPage()">Load more...</button>
 </div>
+
+<script type="text/javascript">
+
+  const pageData = [
+    // FIXME unmock
+    {% for i in range_mock %}
+    {% for job in batch['jobs'] %}
+      [
+        [
+          "{{ base_path }}/batches/{{ job['batch_id'] }}/jobs/{{ job['job_id'] }}",
+          "{{ i + job['job_id'] }}",
+        ],
+        "{{ job['name'] }}",
+        "{{ job['state'] }}",
+        "{{ job['exit_code'] }}",
+        "{{ job['duration'] }}",
+        "{{ job['cost'] }}",
+      ],
+    {% endfor %}
+    {% endfor %}
+  ]
+
+  const pageSize = 50
+  let currentJobIdx = 0
+  const nextPage = () => {
+    const nextJobIdx = pageSize + currentJobIdx
+    pageData
+      .slice(currentJobIdx, nextJobIdx)
+      .forEach(([[link, id], ...rest]) => {
+        linkEle = document.createElement("a")
+        linkEle.className = "fill-td"
+        linkEle.href = link
+        linkEle.innerHTML = id
+        idEle = document.createElement("td")
+        idEle.className = "numeric-cell" 
+        idEle.appendChild(linkEle)
+        row = document.createElement("tr");
+        [
+          idEle,
+          ...rest.map((field) => {
+            const ele = document.createElement("td")
+            ele.innerHTML = field
+            return ele
+          })
+        ].forEach((ele) => row.appendChild(ele))
+        document.getElementById("batch-table-body").appendChild(row)
+      })
+    currentJobIdx = nextJobIdx
+    if (currentJobIdx >= pageData.length) {
+      document.getElementById("next-page").style.display = "none"
+    }
+  }
+
+  nextPage()
+
+
+  // TODO this ends up trying to hit https://auth.hail.is/login?https://:authority:path, which gets a cors error
+  //      - fix cors settings on auth server
+  //      - shouldn't it instead be hitting https://auth.hail.is/api/v1alpha/userinfo via impersonate_user_and_get_info? why is the redirect happening?
+  fetch(
+    "../api/v1alpha/batches/{{ batch['id'] }}/jobs",
+    // { headers: { Authorization: "Bearer {{ session_id }}" } }
+  ).then((result) => console.log(result))
+</script>
+
 <script type="text/javascript">
   focusOnSlash("searchBar");
 </script>

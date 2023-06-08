@@ -310,7 +310,7 @@ WITH base_t AS
     jobs.job_id = job_attributes.job_id AND
     job_attributes.`key` = 'name'
   WHERE {' AND '.join(where_conditions)}
-  LIMIT 50
+  LIMIT 10000
 )
 SELECT base_t.*, COALESCE(SUM(`usage` * rate), 0) AS cost
 FROM base_t
@@ -1768,7 +1768,7 @@ async def ui_batch(request, userdata, batch_id):
 
     batch['cost'] = cost_str(batch['cost'])
 
-    page_context = {'batch': batch, 'q': request.query.get('q'), 'last_job_id': last_job_id}
+    page_context = {'batch': batch, 'q': request.query.get('q'), 'last_job_id': last_job_id, 'range_mock': range(0, 1000, 3), 'session_id': userdata['session_id']}
     return await render_template('batch', request, userdata, 'batch.html', page_context)
 
 
