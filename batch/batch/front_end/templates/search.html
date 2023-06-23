@@ -1,0 +1,96 @@
+{% macro search(page_name) %}
+{% set component_name = (page_name | lower) + "search" %}
+  {% block head %}
+    <style>
+      .{{ component_name }} {
+        .hidden {
+          display: none;
+        }
+      }
+      #{{ component_name }}-info-modal {
+        position: absolute;
+        border-radius: 3px;
+        padding: 0.75rem;
+        background-color: #d9e2ff;
+      }
+      #{{ component_name }}-info-modal-inner:after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 4.875%;
+        margin-left: -5px;
+        border-width: 10px;
+        border-style: solid;
+        border-color: #d9e2ff transparent transparent transparent;
+      }
+      #{{ component_name }}-search {
+        margin: 10px;
+        margin-left: 0px;
+      }
+      #{{ component_name }}-search-inner {
+        height: 15rem;
+        width: 65vw;
+        display: flex;
+        align-items: center;
+      }
+      #{{ component_name }}-search-box {
+        background-color: #efefef;
+        padding: 0.75rem;
+        border-radius: 3px;
+        font-size: 1rem;
+        resize: none;
+        width: 450px;
+        white-space: pre;
+        height: 10rem;
+      }
+      #{{ component_name}}-buttons {
+        margin-left: 1rem;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      #{{ component_name }}-submit-button {
+        margin-bottom: 0.9rem;
+      }
+      #{{ component_name }}-submit-button:hover {
+        background-color: #283870;
+        color: #fff;
+      }
+      #{{ component_name }}-info-button {
+        margin-top: 0.4rem;
+        color: #8398e0;
+        font-size: 2rem;
+      }
+      #{{ component_name }}-info-button:hover {
+        cursor: pointer;
+        color: #283870;
+      }
+    </style>
+  {% endblock %}
+  <h2>{{ page_name }}</h2>
+  <div class="flex-col">
+    <div id="{{ component_name }}-search" class="flex-col-align-right">
+      <form method="GET" action="{{ base_path }}/batches/{{ batch["id"] }}">
+        <div id="{{ component_name }}-search-inner">
+          <div>
+            <textarea id="{{ component_name }}-search-box" autofocus name="q">
+              {% if q %}
+                {{ q }}
+              {% endif %}
+            </textarea>
+          </div>
+          <div id="buttons">
+            <a href="https://hail.is/docs/batch/service.html#advanced-search" target="_blank">
+              <i id="{{ component_name }}-info-button" class="fa fa-question-circle">
+              </i>
+            </a>
+            <button class="{{ component_name }}-search-button" type="submit">
+              Search
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endmacro %}
