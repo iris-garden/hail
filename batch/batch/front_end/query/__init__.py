@@ -3,7 +3,7 @@ from typing import Any, List, Optional, Tuple
 from .query_v1 import parse_batch_jobs_query_v1, parse_list_batches_query_v1
 from .query_v2 import parse_batch_jobs_query_v2, parse_list_batches_query_v2
 
-CURRENT_QUERY_VERSION = 1
+CURRENT_QUERY_VERSION = 2
 
 
 def build_list_batches_query(user: str, version: int, q: str, last_batch_id: Optional[int]) -> Tuple[str, List[Any]]:
