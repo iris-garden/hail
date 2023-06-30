@@ -42,7 +42,7 @@
 {% endfor %}
 {% endif %}
 
-{% search("Jobs") %}
+{% search("Jobs", "{{ base_path }}/batches/{{ batch["id"] }}") %}
 
 <div class="flex-col">
   <div class='flex-col' style="overflow: auto;">

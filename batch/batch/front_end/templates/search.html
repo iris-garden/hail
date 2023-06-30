@@ -1,4 +1,4 @@
-{% macro search(page_name) %}
+{% macro search(page_name, endpoint) %}
 {% set component_name = (page_name | lower) + "search" %}
   {% block head %}
     <style>
@@ -71,7 +71,7 @@
   <h2>{{ page_name }}</h2>
   <div class="flex-col">
     <div id="{{ component_name }}-search" class="flex-col-align-right">
-      <form method="GET" action="{{ base_path }}/batches/{{ batch["id"] }}">
+      <form method="GET" action="{{ endpoint }}">
         <div id="{{ component_name }}-search-inner">
           <div>
             <textarea id="{{ component_name }}-search-box" autofocus name="q">
