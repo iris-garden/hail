@@ -5,7 +5,7 @@ force-exclude = 'hail|datasets|sql|\.mypy'
 
 [tool.ruff]
 line-length = 120
-select = ["F", "E", "W", "I", "PL", "RUF"]
+select = ["F", "E", "W", "I", "PL", "RUF", "A"]
 ignore = [
     "E501",    # Line length too long
     "E722",    # Do not use bare `except`
