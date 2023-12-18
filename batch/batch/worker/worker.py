@@ -2954,6 +2954,8 @@ class JVMPool:
 
 class Worker:
     def __init__(self, client_session: httpx.ClientSession):
+        self.id = uuid.uuid4()
+
         self.active = False
         self.cores_mcpu = CORES * 1000
         self.last_updated = time_msecs()
@@ -3231,6 +3233,7 @@ class Worker:
             log.exception(f'could not activate after trying for {MAX_IDLE_TIME_MSECS} ms, exiting')
             return
 
+        self.task_manager.ensure_future(periodically_call(5, self.send_htop_update))
         self.task_manager.ensure_future(periodically_call(60, self.send_billing_update))
 
         try:
@@ -3426,6 +3429,36 @@ class Worker:
         except Exception as e:
             log.exception(f'Error while deleting unused image: {e}')
 
+    async def send_htop_update(self):
+        async def update():
+            update_timestamp = time_msecs()
+            running_attempts = []
+            for (batch_id, job_id), job in self.jobs.items():
+                if not job.marked_job_started or job.end_time is not None:
+                    continue
+                running_attempts.append(
+                    {
+                        'batch_id': batch_id,
+                        'job_id': job_id,
+                        'attempt_id': job.attempt_id,
+                    }
+                )
+
+            await self.client_session.post(
+                deploy_config.url('batch', '/api/v1alpha/htop_update'),
+                json={
+                    "id": self.id,
+                    "timestamp": update_timestamp,
+                    "attempts": running_attempts,
+                },
+                headers=self.headers,
+            )
+
+            log.info(f'sent billing update for {time_msecs_str(update_timestamp)}')
+
+        await retry_transient_errors(update)
+
+
     async def send_billing_update(self):
         async def update():
             update_timestamp = time_msecs()
@@ -3443,7 +3476,6 @@ class Worker:
 
             if running_attempts:
                 billing_update_data = {'timestamp': update_timestamp, 'attempts': running_attempts}
-
                 await self.client_session.post(
                     deploy_config.url('batch-driver', '/api/v1alpha/billing_update'),
                     json=billing_update_data,

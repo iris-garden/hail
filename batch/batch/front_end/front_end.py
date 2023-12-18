@@ -198,6 +198,69 @@ def cast_query_param_to_int(param: Optional[str]) -> Optional[int]:
     return None
 
 
+@routes.post('/api/v1alpha/htop_update')
+async def htop_update(request: web.Request) -> web.Response:
+    body = await json_request(request)
+
+    worker_name = None
+    try:
+        worker_name = request.app["htop_workers"][body["id"]]
+    except KeyError:
+        names = [name for name in ["bīngbáo", "granizo", "olon", "saudação", "śilābr̥ṣṭi", "grad", "hyō", "kêu", "dolu", "gārā", "vaḍagaḷḷu", "bisbal", "báo zi", "grêle", "ālaṅkaṭṭi maḻai", "yushid", "hagel", "udan es", "grandine", "karā", "žâle"] if name not in request.app["htop_workers"]]
+        if len(names) == 0:
+            raise ValueError("not enough worker names available")
+        request.app["htop_workers"][body["id"]] = random.choice(names)
+    if worker_name is None:
+        raise ValueError("no worker name created")
+
+    try:
+        should_update = request.app["htop"][worker_name]["timestamp"] < body["timestamp"]
+    except KeyError:
+        should_update = True
+    if should_update:
+        for attempt in body["attempts"]:
+            attempt["cpu"] = 0
+            attempt["mem"] = 0
+            resource_usage = await _get_job_resource_usage(request.app, attempt["batch_id"], attempt["job_id"])
+            if resource_usage is not None:
+                for _, df in resource_usage.items():
+                    if df is None:
+                        continue
+                    n_rows = df.shape[0]
+                    idx = df.idxmax().get("time_msecs")
+                    attempt["mem"] += df['memory_in_bytes'][idx]
+                    attempt["cpu"] += df['cpu_usage'][idx]
+                attempt["mem"] = humanize.naturalsize(attempt["mem"], binary=False)
+        request.app["htop"][worker_name] = {k: v for k, v in body.items() if k != "id"}
+        request.app["htop"] = {k: v for k, v in request.app["htop"].items() if body["timestamp"] - v["timestamp"] < 60000}
+
+    return web.Response()
+
+
+@routes.get('/api/v1alpha/htop/ws')
+async def htop_websocket(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    async for msg in ws:
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.data == "close":
+                await ws.close()
+            elif msg.data == "get_data":
+                while True:
+                    await ws.send_json(request.app["htop"])
+                    await asyncio.sleep(5)
+        elif msg.type == aiohttp.WSMsgType.ERROR:
+            log.info(f"ws connection closed with exception: {ws.exception()}")
+    return ws
+
+
+@routes.get('/htop')
+@auth.authenticated_users_only()
+@catch_ui_error_in_dev
+async def ui_htop(request, userdata):
+    return await render_template('batch', request, userdata, 'htop.html', {})
+
+
 @routes.get('/healthcheck')
 async def get_healthcheck(_) -> web.Response:
     return web.Response()
@@ -2965,6 +3028,9 @@ SELECT instance_id, n_tokens, frozen FROM globals;
     )
 
     app['task_manager'].ensure_future(periodically_call(5, _refresh, app))
+
+    app["htop"] = {}
+    app["htop_workers"] = {}
 
 
 async def on_cleanup(app):

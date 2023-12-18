@@ -427,6 +427,31 @@ async def billing_update(request, instance):
     return await asyncio.shield(billing_update_1(request, instance))
 
 
+@routes.get("/htop_resources/{worker_id}")
+@batch_only
+async def htop_resources(request):
+    app = request.app
+    db: Database = app['db']
+    worker_id = request.match_info["worker_id"]
+    batch_id = request.match_info["batch_id"]
+    job_id = request.match_info["job_id"]
+    inst_coll_manager: InstanceCollectionManager = app['driver'].inst_coll_manager
+    jpim: JobPrivateInstanceManager = app['driver'].job_private_inst_manager
+    ready_cores = await db.select_and_fetchone(
+        '''
+SELECT CAST(COALESCE(SUM(ready_cores_mcpu), 0) AS SIGNED) AS ready_cores_mcpu
+FROM user_inst_coll_resources;
+'''
+    )
+    ready_cores_mcpu = ready_cores['ready_cores_mcpu']
+    return json_response([{
+        "batch_id": batch_id,
+        "job_id": job_id,
+        "cpu_usage": _,
+        "memory_usage": _,
+    }])
+
+
 @routes.get('/')
 @routes.get('')
 @auth.authenticated_developers_only()

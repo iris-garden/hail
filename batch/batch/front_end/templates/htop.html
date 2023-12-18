@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Hail Batch | htop</title>
+    <style>
+      html {
+        background-color: #000;
+        color: #fff;
+        font-family: monospace;
+        font-size: 1rem;
+      }
+      #main {
+        margin: 1rem;
+      }
+      th, td {
+        text-align: left;
+        padding-right: 0.5rem;
+      }
+      .header, .selected {
+        background-color: #fff;
+        color: #000;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="main">
+      <div id="help" class="hidden">
+        <h2>keyboard shortcuts</h2>
+        <ul>
+          <li>Up/Down Arrows: scroll process list</li>
+          <li>F1 h ?: show this help screen</li>
+          <li>F3 /: name search</li>
+          <li>F4 \: name filtering</li>
+          <li>b: batch ID filtering</li>
+          <li>u: username filtering</li>
+          <li>Enter: go to job page</li>
+        </ul>
+        <h4>press any key to return.</h4>
+      </div>
+      <h4 id="search" class="hidden"></h4>
+      <table id="jobs">
+        <thead>
+          <tr class="header">
+            <th>USER</th>
+            <th>WORKER</th>
+            <th>BATCH</th>
+            <th>JOB</th>
+            <th>S</th>
+            <th>CPU%</th>
+            <th>MEM%</th>
+            <th>START</th>
+            <th>TIME+</th>
+            <th>COST</th>
+            <th>JNAME</th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body">
+        </tbody>
+      </table>
+    </div>
+    <script type="text/javascript">
+      // utilities
+      const modifiers = new Set(["Alt", "AltGraph", "CapsLock", "Control", "Fn", "FnLock", "Hyper", "Meta", "NumLock", "ScrollLock", "Shift", "Super", "Symbol", "SymbolLock"]);
+      const ifDefined = (val, fallback) =>
+        val !== undefined ? val : fallback;
+      const show = (ele) => {
+        ele.classList.remove("hidden");
+      };
+      const hide = (ele) => {
+        ele.classList.add("hidden");
+      };
+      const select = (ele) => {
+        ele.classList.add("selected");
+      };
+      const deselect = (ele) => {
+        ele.classList.remove("selected");
+      };
+      window.onload = () => {
+        const socket = new WebSocket(`wss://internal.hail.is/irademac/batch/api/v1alpha/htop/ws`)
+        socket.addEventListener("open", () => {
+          socket.send("get_data");
+        });
+        let keyListener = null;
+        socket.addEventListener("message", ({ data }) => {
+          if (keyListener !== null) {
+            window.removeEventListener("keydown", keyListener);
+          }
+          const parsed = JSON.parse(data);
+          const rows = document.createElement("tbody");
+          Object.entries(parsed).forEach(([worker, { timestamp, attempts }]) => {
+            attempts.forEach(({ batch_id, job_id, attempt_id, cpu, mem }) => {
+              const row = document.createElement("tr");
+              cells = ["USER", "WORKER", "BATCH", "JOB", "S", "CPU%", "MEM", "START", "TIME+", "COST", "JNAME"].map(col => document.createElement("td"));
+              cells[0].innerHTML = "irademac";
+              cells[1].innerHTML = worker;
+              cells[2].innerHTML = batch_id;
+              cells[3].innerHTML = job_id;
+              cells[5].innerHTML = cpu;
+              cells[6].innerHTML = mem;
+              cells.forEach(cell => row.appendChild(cell));
+              rows.appendChild(row);
+            })
+          });
+          document.getElementById("jobs").replaceChild(rows, document.getElementById("jobs-body"));
+          rows.id = "jobs-body";
+          const mode = {
+            main: "jobs",
+            search: null,
+          };
+          const cursor = {
+            curr: null,
+            prev: null,
+          };
+          const cursorStore = (prev = true) => {
+            if (prev) {
+              cursor.prev = cursor.curr;
+            }
+            cursor.curr = null;
+          };
+          const cursorRestore = () => {
+            cursor.curr = cursor.prev;
+            cursor.prev = null;
+          }
+          keyListener = ({ key }) => {
+            const [main, help, jobs, search] = ["main", "help", "jobs", "search"].map(
+              id => document.getElementById(id)
+            );
+            const jobsArray = Array.from(jobs.rows).slice(1);
+            // TODO cursor can be moved to hidden rows, should instead only move if row is not hidden
+            const cursorMove = (bound, modifier) => {
+              if (jobs.rows.length >= 1) {
+                if (cursor.curr === null) {
+                  if (cursor.prev !== null) {
+                    cursorRestore();
+                  } else {
+                    cursor.curr = 1;
+                  }
+                  select(jobs.rows[cursor.curr]);
+                } else if (cursor.curr !== bound) {
+                  cursor.curr = cursor.curr + modifier;
+                  select(jobs.rows[cursor.curr]);
+                  deselect(jobs.rows[cursor.curr - modifier]);
+                }
+              }
+            };
+            const cursorDeselect = (prev = true) => {
+              if (jobs.rows.length >= 1) {
+                if (cursor.curr !== null) {
+                  deselect(jobs.rows[cursor.curr]);
+                  cursorStore(prev);
+                }
+              }
+            };
+            const keyHandlers = {
+              "jobs": {
+                "h": () => {
+                  show(help);
+                  hide(jobs);
+                  mode.main = "help";
+                },
+                "ArrowUp": () => {
+                  cursorMove(1, -1)
+                },
+                "ArrowDown": () => {
+                  cursorMove(jobs.rows.length - 1, 1)
+                },
+                "Escape": cursorDeselect,
+                "/": () => {
+                  // TODO stop updating
+                  mode.main = "search";
+                  mode.search = "search";
+                  show(search);
+                  search.innerHTML = "Search: ";
+                },
+                "\\": () => {
+                  // TODO stop updating
+                  // TODO type in search string
+                  mode.main = "search";
+                  mode.search = "filter";
+                  cursorDeselect(prev = false);
+                  jobsArray.forEach(row => {
+                    if (!row.cells[row.cells.length - 1].innerHTML.includes("singlestage")) {
+                      hide(row);
+                    }
+                  })
+                },
+                "b": () => {
+                  mode.main = "search";
+                  mode.search = "batch";
+                },
+                "u": () => {
+                  mode.main = "search";
+                  mode.search = "user";
+                },
+                "Enter": () => {
+                  // TODO enter should go to the job page in a new tab
+                },
+              },
+              // TODO if search is open, escape should obv close it
+              "search": {
+                "default": (key) => {
+                  if (key.length === 1) {
+                    search.innerHTML = search.innerHTML + key;
+                  } else if (key === "Backspace" && search.innerHTML.length > 8) {
+                    search.innerHTML = search.innerHTML.slice(0, -1)
+                  }
+                },
+                "Enter": () => {
+                  const searchHandlers = {
+                    "filter": () => {},
+                    "search": () => {
+                      const idx = jobsArray.findIndex((row, idx) =>
+                        row.cells[row.cells.length - 1].innerHTML.includes(search.innerHTML.slice(8))
+                      );
+                      if (idx !== -1) {
+                        cursorDeselect(prev = false);
+                        cursor.curr = idx + 1;
+                        select(jobsArray[idx]);
+                      }
+                    },
+                    "batch": () => {},
+                    "user": () => {},
+                  };
+                  searchHandlers[mode.search]();
+                  mode.main = "jobs";
+                  mode.search = null;
+                  hide(search)
+                },
+              },
+              "help": {
+                "default": (key) => {
+                  if (!(modifiers.has(key))) {
+                    hide(help);
+                    show(jobs);
+                    mode.main = "jobs";
+                  }
+                },
+              }
+            };
+            let handler = ifDefined(keyHandlers[mode.main][key], keyHandlers[mode.main]["default"]);
+            if (handler !== undefined) {
+              handler(key);
+            }
+          }
+          window.addEventListener("keydown", keyListener);
+        });
+      }
+    </script>
+  </body>
+</html>
