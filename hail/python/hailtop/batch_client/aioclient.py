@@ -41,28 +41,30 @@ class InUpdateJobId(int):
 
 
 class JobSpec:
-    def __init__(self,
-                 job: 'Job',
-                 process: dict,
-                 env: Optional[Dict[str, str]] = None,
-                 port: Optional[int] = None,
-                 resources: Optional[dict] = None,
-                 secrets: Optional[dict] = None,
-                 service_account: Optional[str] = None,
-                 attributes: Optional[Dict[str, str]] = None,
-                 parents: Optional[List['Job']] = None,
-                 input_files: Optional[List[Tuple[str, str]]] = None,
-                 output_files: Optional[List[Tuple[str, str]]] = None,
-                 always_run: bool = False,
-                 always_copy_output: bool = False,
-                 timeout: Optional[Union[int, float]] = None,
-                 cloudfuse: Optional[List[Tuple[str, str, bool]]] = None,
-                 requester_pays_project: Optional[str] = None,
-                 mount_tokens: bool = False,
-                 network: Optional[str] = None,
-                 unconfined: bool = False,
-                 user_code: Optional[str] = None,
-                 regions: Optional[List[str]] = None):
+    def __init__(
+        self,
+        job: 'Job',
+        process: dict,
+        env: Optional[Dict[str, str]] = None,
+        port: Optional[int] = None,
+        resources: Optional[dict] = None,
+        secrets: Optional[dict] = None,
+        service_account: Optional[str] = None,
+        attributes: Optional[Dict[str, str]] = None,
+        parents: Optional[List['Job']] = None,
+        input_files: Optional[List[Tuple[str, str]]] = None,
+        output_files: Optional[List[Tuple[str, str]]] = None,
+        always_run: bool = False,
+        always_copy_output: bool = False,
+        timeout: Optional[Union[int, float]] = None,
+        cloudfuse: Optional[List[Tuple[str, str, bool]]] = None,
+        requester_pays_project: Optional[str] = None,
+        mount_tokens: bool = False,
+        network: Optional[str] = None,
+        unconfined: bool = False,
+        user_code: Optional[str] = None,
+        regions: Optional[List[str]] = None,
+    ):
         self.job = job
         self.process = process
         self.env = env
@@ -150,8 +152,10 @@ class JobSpec:
         if self.output_files:
             job_spec['output_files'] = [{"from": src, "to": dst} for (src, dst) in self.output_files]
         if self.cloudfuse:
-            job_spec['cloudfuse'] = [{"bucket": bucket, "mount_path": mount_path, "read_only": read_only}
-                                     for (bucket, mount_path, read_only) in self.cloudfuse]
+            job_spec['cloudfuse'] = [
+                {"bucket": bucket, "mount_path": mount_path, "read_only": read_only}
+                for (bucket, mount_path, read_only) in self.cloudfuse
+            ]
         if self.requester_pays_project:
             job_spec['requester_pays_project'] = self.requester_pays_project
         if self.mount_tokens:
@@ -308,19 +312,23 @@ class Job:
         return sum(durations)  # type: ignore
 
     @staticmethod
-    def submitted_job(batch: 'Batch', job_group: 'JobGroup', job_id: int, _status: Optional[GetJobResponseV1Alpha] = None):
+    def submitted_job(
+        batch: 'Batch', job_group: 'JobGroup', job_id: int, _status: Optional[GetJobResponseV1Alpha] = None
+    ):
         return Job(batch, job_group, AbsoluteJobId(job_id), _status=_status)
 
     @staticmethod
     def unsubmitted_job(batch: 'Batch', job_group: 'JobGroup', job_id: int):
         return Job(batch, job_group, InUpdateJobId(job_id))
 
-    def __init__(self,
-                 batch: 'Batch',
-                 job_group: 'JobGroup',
-                 job_id: Union[AbsoluteJobId, InUpdateJobId],
-                 *,
-                 _status: Optional[GetJobResponseV1Alpha] = None):
+    def __init__(
+        self,
+        batch: 'Batch',
+        job_group: 'JobGroup',
+        job_id: Union[AbsoluteJobId, InUpdateJobId],
+        *,
+        _status: Optional[GetJobResponseV1Alpha] = None,
+    ):
         self._batch = batch
         self._job_group = job_group
         self._job_id = job_id
@@ -411,8 +419,8 @@ class Job:
 
     async def wait(self) -> Dict[str, Any]:
         return cast(
-            Dict[str, Any], # https://stackoverflow.com/a/76515675/6823256
-            await self._wait_for_states(*complete_states)
+            Dict[str, Any],  # https://stackoverflow.com/a/76515675/6823256
+            await self._wait_for_states(*complete_states),
         )
 
     async def _wait_for_states(self, *states: str) -> GetJobResponseV1Alpha:
@@ -426,7 +434,9 @@ class Job:
 
     async def container_log(self, container_name: str) -> bytes:
         self._raise_if_not_submitted()
-        async with await self._client._get(f'/api/v1alpha/batches/{self.batch_id}/jobs/{self.job_id}/log/{container_name}') as resp:
+        async with await self._client._get(
+            f'/api/v1alpha/batches/{self.batch_id}/jobs/{self.job_id}/log/{container_name}'
+        ) as resp:
             return await resp.read()
 
     async def log(self):
@@ -457,12 +467,14 @@ class JobGroupNotSubmittedError(Exception):
 
 
 class JobGroupSpec:
-    def __init__(self,
-                 job_group: 'JobGroup',
-                 parent_job_group: 'JobGroup',
-                 attributes: Optional[dict] = None,
-                 callback: Optional[str] = None,
-                 cancel_after_n_failures: Optional[int] = None):
+    def __init__(
+        self,
+        job_group: 'JobGroup',
+        parent_job_group: 'JobGroup',
+        attributes: Optional[dict] = None,
+        callback: Optional[str] = None,
+        cancel_after_n_failures: Optional[int] = None,
+    ):
         self.job_group = job_group
         self.parent_job_group = parent_job_group
         self.attributes = attributes
@@ -487,13 +499,14 @@ class JobGroupSpec:
 
 
 class JobGroup:
-    def __init__(self,
-                 batch: 'Batch',
-                 job_group_id: Union[AbsoluteJobGroupId, InUpdateJobGroupId],
-                 *,
-                 attributes: Optional[Dict[str, str]] = None,
-                 last_known_status: Optional[dict] = None,
-                 ):
+    def __init__(
+        self,
+        batch: 'Batch',
+        job_group_id: Union[AbsoluteJobGroupId, InUpdateJobGroupId],
+        *,
+        attributes: Optional[Dict[str, str]] = None,
+        last_known_status: Optional[dict] = None,
+    ):
         self._batch = batch
         self._job_group_id = job_group_id
 
@@ -553,14 +566,16 @@ class JobGroup:
         self._raise_if_not_submitted()
         await self._client._patch(f'/api/v1alpha/batches/{self.batch_id}/job-groups/{self.job_group_id}/cancel')
 
-    async def job_groups(self, last_job_group_id=None, limit=2 ** 64, version=None) -> AsyncIterator['JobGroup']:
+    async def job_groups(self, last_job_group_id=None, limit=2**64, version=None) -> AsyncIterator['JobGroup']:
         n = 0
         while True:
             params = {}
             if last_job_group_id is not None:
                 params['last_child_job_group_id'] = last_job_group_id
 
-            resp = await self._client._get(f'/api/v{version}alpha/batches/{self.id}/job-groups/{self.job_group_id}/job-groups', params=params)
+            resp = await self._client._get(
+                f'/api/v{version}alpha/batches/{self.id}/job-groups/{self.job_group_id}/job-groups', params=params
+            )
             body = await resp.json()
 
             for job_group in body['job_groups']:
@@ -577,11 +592,12 @@ class JobGroup:
             if last_job_group_id is None:
                 break
 
-    async def jobs(self,
-                   q: Optional[str] = None,
-                   version: Optional[int] = None,
-                   recursive: bool = False,
-                   ) -> AsyncIterator[JobListEntryV1Alpha]:
+    async def jobs(
+        self,
+        q: Optional[str] = None,
+        version: Optional[int] = None,
+        recursive: bool = False,
+    ) -> AsyncIterator[JobListEntryV1Alpha]:
         self._raise_if_not_submitted()
         if version is None:
             version = 1
@@ -592,11 +608,10 @@ class JobGroup:
                 params['q'] = q
             if last_job_id is not None:
                 params['last_job_id'] = last_job_id
-            resp = await self._client._get(f'/api/v{version}alpha/batches/{self.batch_id}/job-groups/{self.job_group_id}/jobs', params=params)
-            body = cast(
-                GetJobsResponseV1Alpha,
-                await resp.json()
+            resp = await self._client._get(
+                f'/api/v{version}alpha/batches/{self.batch_id}/job-groups/{self.job_group_id}/jobs', params=params
             )
+            body = cast(GetJobsResponseV1Alpha, await resp.json())
             for job in body['jobs']:
                 yield job
             last_job_id = body.get('last_job_id')
@@ -634,11 +649,12 @@ class JobGroup:
         return self._last_known_status
 
     # FIXME Error if this is called while in a job within the same job group
-    async def _wait(self,
-                    description: str,
-                    progress: BatchProgressBar,
-                    disable_progress_bar: bool,
-                    ) -> Dict[str, Any]:
+    async def _wait(
+        self,
+        description: str,
+        progress: BatchProgressBar,
+        disable_progress_bar: bool,
+    ) -> Dict[str, Any]:
         self._raise_if_not_submitted()
         deploy_config = get_deploy_config()
         url = deploy_config.external_url('batch', f'/batches/{self.batch_id}')
@@ -650,27 +666,22 @@ class JobGroup:
         else:
             description += url
 
-        with progress.with_task(description,
-                                total=status['n_jobs'],
-                                disable=disable_progress_bar) as progress_task:
+        with progress.with_task(description, total=status['n_jobs'], disable=disable_progress_bar) as progress_task:
             while True:
                 status = await self.status()
                 progress_task.update(None, total=status['n_jobs'], completed=status['n_completed'])
                 if status['complete']:
                     return status
-                j = random.randrange(math.floor(1.1 ** i))
+                j = random.randrange(math.floor(1.1**i))
                 await asyncio.sleep(0.100 * j)
                 # max 44.5s
                 if i < 64:
                     i = i + 1
 
     # FIXME Error if this is called while in a job within the same job group
-    async def wait(self,
-                   *,
-                   disable_progress_bar: bool = False,
-                   description: str = '',
-                   progress: Optional[BatchProgressBar] = None
-                   ) -> Dict[str, Any]:
+    async def wait(
+        self, *, disable_progress_bar: bool = False, description: str = '', progress: Optional[BatchProgressBar] = None
+    ) -> Dict[str, Any]:
         self._raise_if_not_submitted()
         if description:
             description += ': '
@@ -699,15 +710,17 @@ class BatchDebugInfo(TypedDict):
 
 
 class Batch:
-    def __init__(self,
-                 client: 'BatchClient',
-                 id: Optional[int],
-                 *,
-                 attributes: Optional[Dict[str, str]] = None,
-                 callback: Optional[str] = None,
-                 token: Optional[str] = None,
-                 cancel_after_n_failures: Optional[int] = None,
-                 last_known_status: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        client: 'BatchClient',
+        id: Optional[int],
+        *,
+        attributes: Optional[Dict[str, str]] = None,
+        callback: Optional[str] = None,
+        token: Optional[str] = None,
+        cancel_after_n_failures: Optional[int] = None,
+        last_known_status: Optional[Dict[str, Any]] = None,
+    ):
         self._client = client
         self._id = id
         self.attributes: Dict[str, str] = attributes or {}
@@ -753,31 +766,37 @@ class Batch:
         self._raise_if_not_created()
         return JobGroup(self, AbsoluteJobGroupId(job_group_id))
 
-    def create_job_group(self,
-                         attributes: Optional[dict] = None,
-                         callback: Optional[str] = None,
-                         cancel_after_n_failures: Optional[int] = None) -> JobGroup:
-        return self._create_job_group(self._root_job_group,
-                                      attributes=attributes,
-                                      callback=callback,
-                                      cancel_after_n_failures=cancel_after_n_failures)
+    def create_job_group(
+        self,
+        attributes: Optional[dict] = None,
+        callback: Optional[str] = None,
+        cancel_after_n_failures: Optional[int] = None,
+    ) -> JobGroup:
+        return self._create_job_group(
+            self._root_job_group,
+            attributes=attributes,
+            callback=callback,
+            cancel_after_n_failures=cancel_after_n_failures,
+        )
 
-    def _create_job_group(self,
-                          parent_job_group: JobGroup,
-                          attributes: Optional[dict] = None,
-                          callback: Optional[str] = None,
-                          cancel_after_n_failures: Optional[int] = None) -> JobGroup:
+    def _create_job_group(
+        self,
+        parent_job_group: JobGroup,
+        attributes: Optional[dict] = None,
+        callback: Optional[str] = None,
+        cancel_after_n_failures: Optional[int] = None,
+    ) -> JobGroup:
         self._job_group_idx += 1
 
-        jg = JobGroup(self,
-                      InUpdateJobGroupId(self._job_group_idx),
-                      attributes=attributes)
+        jg = JobGroup(self, InUpdateJobGroupId(self._job_group_idx), attributes=attributes)
 
-        jg_spec = JobGroupSpec(jg,
-                               parent_job_group,
-                               attributes=attributes,
-                               callback=callback,
-                               cancel_after_n_failures=cancel_after_n_failures)
+        jg_spec = JobGroupSpec(
+            jg,
+            parent_job_group,
+            attributes=attributes,
+            callback=callback,
+            cancel_after_n_failures=cancel_after_n_failures,
+        )
 
         self._job_groups.append(jg)
         self._job_group_specs.append(jg_spec)
@@ -788,14 +807,11 @@ class Batch:
         self._raise_if_not_created()
         await self._root_job_group.cancel()
 
-    def job_groups(self, *, last_job_group_id=None, limit=2 ** 64) -> AsyncIterator[JobGroup]:
+    def job_groups(self, *, last_job_group_id=None, limit=2**64) -> AsyncIterator[JobGroup]:
         self._raise_if_not_created()
         return self._root_job_group.job_groups(last_job_group_id=last_job_group_id, limit=limit)
 
-    def jobs(self,
-             q: Optional[str] = None,
-             version: Optional[int] = None
-             ) -> AsyncIterator[JobListEntryV1Alpha]:
+    def jobs(self, q: Optional[str] = None, version: Optional[int] = None) -> AsyncIterator[JobListEntryV1Alpha]:
         self._raise_if_not_created()
         return self._root_job_group.jobs(q, version, recursive=True)
 
@@ -843,12 +859,9 @@ class Batch:
         return self._last_known_status
 
     # FIXME Error if this is called while within a job of the same Batch
-    async def _wait(self,
-                    description: str,
-                    progress: BatchProgressBar,
-                    disable_progress_bar: bool,
-                    starting_job: int
-                    ) -> Dict[str, Any]:
+    async def _wait(
+        self, description: str, progress: BatchProgressBar, disable_progress_bar: bool, starting_job: int
+    ) -> Dict[str, Any]:
         self._raise_if_not_created()
         deploy_config = get_deploy_config()
         url = deploy_config.external_url('batch', f'/batches/{self.id}')
@@ -858,28 +871,31 @@ class Batch:
             description += f'[link={url}]{self.id}[/link]'
         else:
             description += url
-        with progress.with_task(description,
-                                total=status['n_jobs'] - starting_job + 1,
-                                disable=disable_progress_bar) as progress_task:
+        with progress.with_task(
+            description, total=status['n_jobs'] - starting_job + 1, disable=disable_progress_bar
+        ) as progress_task:
             while True:
                 status = await self.status()
-                progress_task.update(None, total=status['n_jobs'] - starting_job + 1, completed=status['n_completed'] - starting_job + 1)
+                progress_task.update(
+                    None, total=status['n_jobs'] - starting_job + 1, completed=status['n_completed'] - starting_job + 1
+                )
                 if status['complete']:
                     return status
-                j = random.randrange(math.floor(1.1 ** i))
+                j = random.randrange(math.floor(1.1**i))
                 await asyncio.sleep(0.100 * j)
                 # max 44.5s
                 if i < 64:
                     i = i + 1
 
     # FIXME Error if this is called while in a job within the same Batch
-    async def wait(self,
-                   *,
-                   disable_progress_bar: bool = False,
-                   description: str = '',
-                   progress: Optional[BatchProgressBar] = None,
-                   starting_job: int = 1,
-                   ) -> Dict[str, Any]:
+    async def wait(
+        self,
+        *,
+        disable_progress_bar: bool = False,
+        description: str = '',
+        progress: Optional[BatchProgressBar] = None,
+        starting_job: int = 1,
+    ) -> Dict[str, Any]:
         self._raise_if_not_created()
         if description:
             description += ': '
@@ -888,10 +904,11 @@ class Batch:
         with BatchProgressBar(disable=disable_progress_bar) as progress2:
             return await self._wait(description, progress2, disable_progress_bar, starting_job)
 
-    async def debug_info(self,
-                         _jobs_query_string: Optional[str] = None,
-                         _max_jobs: Optional[int] = None,
-                         ) -> BatchDebugInfo:
+    async def debug_info(
+        self,
+        _jobs_query_string: Optional[str] = None,
+        _max_jobs: Optional[int] = None,
+    ) -> BatchDebugInfo:
         self._raise_if_not_created()
         batch_status = await self.status()
         jobs = []
@@ -913,74 +930,79 @@ class Batch:
                 raise
 
     def create_job(self, image: str, command: List[str], **kwargs) -> Job:
-        return self._create_job(
-            self._root_job_group, {'command': command, 'image': image, 'type': 'docker'}, **kwargs
-        )
+        return self._create_job(self._root_job_group, {'command': command, 'image': image, 'type': 'docker'}, **kwargs)
 
     def create_jvm_job(self, jar_spec: Dict[str, str], argv: List[str], *, profile: bool = False, **kwargs):
         if 'always_copy_output' in kwargs:
             raise ValueError("the 'always_copy_output' option is not allowed for JVM jobs")
-        return self._create_job(self._root_job_group, {'type': 'jvm', 'jar_spec': jar_spec, 'command': argv, 'profile': profile}, **kwargs)
+        return self._create_job(
+            self._root_job_group, {'type': 'jvm', 'jar_spec': jar_spec, 'command': argv, 'profile': profile}, **kwargs
+        )
 
-    def _create_job(self,
-                    job_group: JobGroup,
-                    process: dict,
-                    *,
-                    env: Optional[Dict[str, str]] = None,
-                    port: Optional[int] = None,
-                    resources: Optional[dict] = None,
-                    secrets: Optional[dict] = None,
-                    service_account: Optional[str] = None,
-                    attributes: Optional[Dict[str, str]] = None,
-                    parents: Optional[List[Job]] = None,
-                    input_files: Optional[List[Tuple[str, str]]] = None,
-                    output_files: Optional[List[Tuple[str, str]]] = None,
-                    always_run: bool = False,
-                    always_copy_output: bool = False,
-                    timeout: Optional[Union[int, float]] = None,
-                    cloudfuse: Optional[List[Tuple[str, str, bool]]] = None,
-                    requester_pays_project: Optional[str] = None,
-                    mount_tokens: bool = False,
-                    network: Optional[str] = None,
-                    unconfined: bool = False,
-                    user_code: Optional[str] = None,
-                    regions: Optional[List[str]] = None
-                    ) -> Job:
+    def _create_job(
+        self,
+        job_group: JobGroup,
+        process: dict,
+        *,
+        env: Optional[Dict[str, str]] = None,
+        port: Optional[int] = None,
+        resources: Optional[dict] = None,
+        secrets: Optional[dict] = None,
+        service_account: Optional[str] = None,
+        attributes: Optional[Dict[str, str]] = None,
+        parents: Optional[List[Job]] = None,
+        input_files: Optional[List[Tuple[str, str]]] = None,
+        output_files: Optional[List[Tuple[str, str]]] = None,
+        always_run: bool = False,
+        always_copy_output: bool = False,
+        timeout: Optional[Union[int, float]] = None,
+        cloudfuse: Optional[List[Tuple[str, str, bool]]] = None,
+        requester_pays_project: Optional[str] = None,
+        mount_tokens: bool = False,
+        network: Optional[str] = None,
+        unconfined: bool = False,
+        user_code: Optional[str] = None,
+        regions: Optional[List[str]] = None,
+    ) -> Job:
         self._job_idx += 1
 
         j = Job.unsubmitted_job(self, job_group, self._job_idx)
-        job_spec = JobSpec(j,
-                           process=process,
-                           env=env,
-                           port=port,
-                           resources=resources,
-                           secrets=secrets,
-                           service_account=service_account,
-                           attributes=attributes,
-                           parents=parents,
-                           input_files=input_files,
-                           output_files=output_files,
-                           always_run=always_run,
-                           always_copy_output=always_copy_output,
-                           timeout=timeout,
-                           cloudfuse=cloudfuse,
-                           requester_pays_project=requester_pays_project,
-                           mount_tokens=mount_tokens,
-                           network=network,
-                           unconfined=unconfined,
-                           user_code=user_code,
-                           regions=regions)
+        job_spec = JobSpec(
+            j,
+            process=process,
+            env=env,
+            port=port,
+            resources=resources,
+            secrets=secrets,
+            service_account=service_account,
+            attributes=attributes,
+            parents=parents,
+            input_files=input_files,
+            output_files=output_files,
+            always_run=always_run,
+            always_copy_output=always_copy_output,
+            timeout=timeout,
+            cloudfuse=cloudfuse,
+            requester_pays_project=requester_pays_project,
+            mount_tokens=mount_tokens,
+            network=network,
+            unconfined=unconfined,
+            user_code=user_code,
+            regions=regions,
+        )
         self._job_specs.append(job_spec)
         self._jobs.append(j)
         return j
 
-    async def _create_fast(self,
-                           byte_job_specs: List[bytes],
-                           n_jobs: int,
-                           byte_job_group_specs: List[bytes],
-                           n_job_groups: int,
-                           job_progress_task: BatchProgressBarTask,
-                           job_group_progress_task: BatchProgressBarTask):
+    async def _create_fast(
+        self,
+        byte_job_specs: List[bytes],
+        n_jobs: int,
+        byte_job_group_specs: List[bytes],
+        n_job_groups: int,
+        job_progress_task: BatchProgressBarTask,
+        job_group_progress_task: BatchProgressBarTask,
+    ):
         self._raise_if_created()
         assert n_jobs == len(self._job_specs)
         assert n_job_groups == len(self._job_group_specs)
@@ -1013,13 +1035,15 @@ class Batch:
         self._id = batch_json['id']
         self._submission_info = BatchSubmissionInfo(used_fast_path=True)
 
-    async def _update_fast(self,
-                           byte_job_specs: List[bytes],
-                           n_jobs: int,
-                           byte_job_group_specs: List[bytes],
-                           n_job_groups: int,
-                           job_progress_task: BatchProgressBarTask,
-                           job_group_progress_task: BatchProgressBarTask) -> Tuple[int, Optional[int]]:
+    async def _update_fast(
+        self,
+        byte_job_specs: List[bytes],
+        n_jobs: int,
+        byte_job_group_specs: List[bytes],
+        n_job_groups: int,
+        job_progress_task: BatchProgressBarTask,
+        job_group_progress_task: BatchProgressBarTask,
+    ) -> Tuple[int, Optional[int]]:
         self._raise_if_not_created()
         assert n_jobs == len(self._job_specs)
         assert n_job_groups == len(self._job_group_specs)
@@ -1055,11 +1079,12 @@ class Batch:
             start_job_group_id = int(start_job_group_id)
         return (int(update_json['start_job_id']), start_job_group_id)
 
-    def _create_bunches(self,
-                        specs: List[dict],
-                        max_bunch_bytesize: int,
-                        max_bunch_size: int,
-                        ) -> Tuple[List[List[bytes]], List[int]]:
+    def _create_bunches(
+        self,
+        specs: List[dict],
+        max_bunch_bytesize: int,
+        max_bunch_size: int,
+    ) -> Tuple[List[List[bytes]], List[int]]:
         assert max_bunch_bytesize > 0
         assert max_bunch_size > 0
         byte_specs = [orjson.dumps(spec) for spec in specs]
@@ -1072,7 +1097,8 @@ class Batch:
             n_bytes = len(spec)
             assert n_bytes < max_bunch_bytesize, (
                 'every spec must be less than max_bunch_bytesize,'
-                f' { max_bunch_bytesize }B, but {spec.decode()} is larger')
+                f' { max_bunch_bytesize }B, but {spec.decode()} is larger'
+            )
             if bunch_n_bytes + n_bytes < max_bunch_bytesize and len(bunch) < max_bunch_size:
                 bunch.append(spec)
                 bunch_n_bytes += n_bytes
@@ -1089,7 +1115,9 @@ class Batch:
 
         return (byte_specs_bunches, bunch_sizes)
 
-    async def _submit_job_groups(self, byte_job_group_specs: List[bytes], n_job_groups: int, progress_task: BatchProgressBarTask) -> Optional[int]:
+    async def _submit_job_groups(
+        self, byte_job_group_specs: List[bytes], n_job_groups: int, progress_task: BatchProgressBarTask
+    ) -> Optional[int]:
         self._raise_if_not_created()
         assert len(byte_job_group_specs) > 0, byte_job_group_specs
 
@@ -1118,7 +1146,9 @@ class Batch:
             start_job_group_id = int(start_job_group_id)
         return start_job_group_id
 
-    async def _submit_jobs(self, update_id: int, byte_job_specs: List[bytes], n_jobs: int, progress_task: BatchProgressBarTask):
+    async def _submit_jobs(
+        self, update_id: int, byte_job_specs: List[bytes], n_jobs: int, progress_task: BatchProgressBarTask
+    ):
         self._raise_if_not_created()
         assert len(byte_job_specs) > 0, byte_job_specs
 
@@ -1169,46 +1199,53 @@ class Batch:
     async def _create_update(self) -> int:
         self._raise_if_not_created()
         update_spec = self._update_spec()
-        update_json = await (await self._client._post(f'/api/v1alpha/batches/{self.id}/updates/create', json=update_spec)).json()
+        update_json = await (
+            await self._client._post(f'/api/v1alpha/batches/{self.id}/updates/create', json=update_spec)
+        ).json()
         return int(update_json['update_id'])
 
     async def _commit_update(self, update_id: int) -> int:
         self._raise_if_not_created()
-        commit_json = await (await self._client._patch(f'/api/v1alpha/batches/{self.id}/updates/{update_id}/commit')).json()
+        commit_json = await (
+            await self._client._patch(f'/api/v1alpha/batches/{self.id}/updates/{update_id}/commit')
+        ).json()
         return int(commit_json['start_job_id'])
 
-    async def _submit_job_bunches(self,
-                                  update_id: int,
-                                  byte_job_specs_bunches: List[List[bytes]],
-                                  bunch_sizes: List[int],
-                                  progress_task: BatchProgressBarTask):
+    async def _submit_job_bunches(
+        self,
+        update_id: int,
+        byte_job_specs_bunches: List[List[bytes]],
+        bunch_sizes: List[int],
+        progress_task: BatchProgressBarTask,
+    ):
         self._raise_if_not_created()
         await bounded_gather(
-            *[functools.partial(self._submit_jobs, update_id, bunch, size, progress_task)
-              for bunch, size in zip(byte_job_specs_bunches, bunch_sizes)
-              ],
+            *[
+                functools.partial(self._submit_jobs, update_id, bunch, size, progress_task)
+                for bunch, size in zip(byte_job_specs_bunches, bunch_sizes)
+            ],
             parallelism=6,
             cancel_on_error=True,
         )
 
-    async def _submit_job_group_bunches(self,
-                                        byte_job_group_specs_bunches: List[List[bytes]],
-                                        bunch_sizes: List[int],
-                                        progress_task: BatchProgressBarTask):
+    async def _submit_job_group_bunches(
+        self,
+        byte_job_group_specs_bunches: List[List[bytes]],
+        bunch_sizes: List[int],
+        progress_task: BatchProgressBarTask,
+    ):
         self._raise_if_not_created()
         job_group_offset = 0
         for bunch, size in zip(byte_job_group_specs_bunches, bunch_sizes):
             start_job_group_id = await self._submit_job_groups(bunch, size, progress_task)
-            for jg in self._job_groups[job_group_offset:job_group_offset + size]:
+            for jg in self._job_groups[job_group_offset : job_group_offset + size]:
                 assert start_job_group_id is not None
                 jg._submit(start_job_group_id)
                 job_group_offset += size
 
-    async def _submit(self,
-                      max_bunch_bytesize: int,
-                      max_bunch_size: int,
-                      disable_progress_bar: bool,
-                      progress: BatchProgressBar) -> Tuple[Optional[int], Optional[int]]:
+    async def _submit(
+        self, max_bunch_bytesize: int, max_bunch_size: int, disable_progress_bar: bool, progress: BatchProgressBar
+    ) -> Tuple[Optional[int], Optional[int]]:
         n_jobs = len(self._jobs)
         job_specs = [spec.to_dict() for spec in self._job_specs]
         byte_job_specs_bunches, job_bunch_sizes = self._create_bunches(job_specs, max_bunch_bytesize, max_bunch_size)
@@ -1216,27 +1253,42 @@ class Batch:
 
         n_job_groups = len(self._job_groups)
         job_group_specs = [spec.to_dict() for spec in self._job_group_specs]
-        byte_job_group_specs_bunches, job_group_bunch_sizes = self._create_bunches(job_group_specs, max_bunch_bytesize, max_bunch_size)
+        byte_job_group_specs_bunches, job_group_bunch_sizes = self._create_bunches(
+            job_group_specs, max_bunch_bytesize, max_bunch_size
+        )
         n_job_group_bunches = len(byte_job_group_specs_bunches)
 
-        with progress.with_task('submit job groups', total=n_job_groups,
-                                disable=(disable_progress_bar or n_job_group_bunches < 100)) as job_group_progress_task:
-            with progress.with_task('submit job bunches', total=n_jobs, disable=(disable_progress_bar or n_job_bunches < 100)) as job_progress_task:
+        with progress.with_task(
+            'submit job groups', total=n_job_groups, disable=(disable_progress_bar or n_job_group_bunches < 100)
+        ) as job_group_progress_task:
+            with progress.with_task(
+                'submit job bunches', total=n_jobs, disable=(disable_progress_bar or n_job_bunches < 100)
+            ) as job_progress_task:
                 if not self.is_created:
                     if n_job_bunches == 0 and n_job_group_bunches == 0:
                         await self._open_batch()
                         log.info(f'created batch {self.id}')
                         return (None, None)
-                    if ((n_job_bunches <= 1 and n_job_group_bunches <= 1) and
-                        ((n_job_bunches == 1 and n_job_group_bunches == 1 and (len(byte_job_specs_bunches[0]) + len(byte_job_group_specs_bunches[0]) <= max_bunch_bytesize)) or
-                            (n_job_bunches == 1 and n_job_group_bunches == 0) or
-                            (n_job_bunches == 0 and n_job_group_bunches == 1))):
-                        await self._create_fast(byte_job_specs_bunches[0] if n_job_bunches == 1 else [],
-                                                job_bunch_sizes[0] if n_job_bunches == 1 else 0,
-                                                byte_job_group_specs_bunches[0] if n_job_group_bunches == 1 else [],
-                                                job_group_bunch_sizes[0] if n_job_group_bunches == 1 else 0,
-                                                job_progress_task,
-                                                job_group_progress_task)
+                    if (n_job_bunches <= 1 and n_job_group_bunches <= 1) and (
+                        (
+                            n_job_bunches == 1
+                            and n_job_group_bunches == 1
+                            and (
+                                len(byte_job_specs_bunches[0]) + len(byte_job_group_specs_bunches[0])
+                                <= max_bunch_bytesize
+                            )
+                        )
+                        or (n_job_bunches == 1 and n_job_group_bunches == 0)
+                        or (n_job_bunches == 0 and n_job_group_bunches == 1)
+                    ):
+                        await self._create_fast(
+                            byte_job_specs_bunches[0] if n_job_bunches == 1 else [],
+                            job_bunch_sizes[0] if n_job_bunches == 1 else 0,
+                            byte_job_group_specs_bunches[0] if n_job_group_bunches == 1 else [],
+                            job_group_bunch_sizes[0] if n_job_group_bunches == 1 else 0,
+                            job_progress_task,
+                            job_group_progress_task,
+                        )
                         start_job_id = 1
                         start_job_group_id = 1
                     else:
@@ -1245,12 +1297,18 @@ class Batch:
 
                         start_job_group_id = None
                         if len(self._job_groups) > 0:
-                            await self._submit_job_group_bunches(byte_job_group_specs_bunches, job_group_bunch_sizes, job_group_progress_task)
+                            await self._submit_job_group_bunches(
+                                byte_job_group_specs_bunches, job_group_bunch_sizes, job_group_progress_task
+                            )
                             # we need to recompute the specs now that the job group ID is absolute
                             job_specs = [spec.to_dict() for spec in self._job_specs]
-                            byte_job_specs_bunches, job_bunch_sizes = self._create_bunches(job_specs, max_bunch_bytesize, max_bunch_size)
+                            byte_job_specs_bunches, job_bunch_sizes = self._create_bunches(
+                                job_specs, max_bunch_bytesize, max_bunch_size
+                            )
 
-                        await self._submit_job_bunches(update_id, byte_job_specs_bunches, job_bunch_sizes, job_progress_task)
+                        await self._submit_job_bunches(
+                            update_id, byte_job_specs_bunches, job_bunch_sizes, job_progress_task
+                        )
                         start_job_id = await self._commit_update(update_id)
                         self._submission_info = BatchSubmissionInfo(used_fast_path=False)
                         assert start_job_id == 1
@@ -1259,28 +1317,44 @@ class Batch:
                     if n_job_bunches == 0 and n_job_group_bunches == 0:
                         log.warning('Tried to submit an update with 0 jobs and 0 job groups. Doing nothing.')
                         return (None, None)
-                    if ((n_job_bunches <= 1 and n_job_group_bunches <= 1) and
-                        ((n_job_bunches == 1 and n_job_group_bunches == 1 and (len(byte_job_specs_bunches[0]) + len(byte_job_group_specs_bunches[0]) <= max_bunch_bytesize)) or
-                            (n_job_bunches == 1 and n_job_group_bunches == 0) or
-                            (n_job_bunches == 0 and n_job_group_bunches == 1))):
-                        start_job_id, start_job_group_id = await self._update_fast(byte_job_specs_bunches[0] if n_job_bunches == 1 else [],
-                                                                                   job_bunch_sizes[0] if n_job_bunches == 1 else 0,
-                                                                                   byte_job_group_specs_bunches[0] if n_job_group_bunches == 1 else [],
-                                                                                   job_group_bunch_sizes[0] if n_job_group_bunches == 1 else 0,
-                                                                                   job_progress_task,
-                                                                                   job_group_progress_task)
+                    if (n_job_bunches <= 1 and n_job_group_bunches <= 1) and (
+                        (
+                            n_job_bunches == 1
+                            and n_job_group_bunches == 1
+                            and (
+                                len(byte_job_specs_bunches[0]) + len(byte_job_group_specs_bunches[0])
+                                <= max_bunch_bytesize
+                            )
+                        )
+                        or (n_job_bunches == 1 and n_job_group_bunches == 0)
+                        or (n_job_bunches == 0 and n_job_group_bunches == 1)
+                    ):
+                        start_job_id, start_job_group_id = await self._update_fast(
+                            byte_job_specs_bunches[0] if n_job_bunches == 1 else [],
+                            job_bunch_sizes[0] if n_job_bunches == 1 else 0,
+                            byte_job_group_specs_bunches[0] if n_job_group_bunches == 1 else [],
+                            job_group_bunch_sizes[0] if n_job_group_bunches == 1 else 0,
+                            job_progress_task,
+                            job_group_progress_task,
+                        )
                     else:
                         update_id = await self._create_update()
                         assert update_id is not None
 
                         start_job_group_id = None
                         if len(self._job_groups) > 0:
-                            await self._submit_job_group_bunches(byte_job_group_specs_bunches, job_group_bunch_sizes, job_group_progress_task)
+                            await self._submit_job_group_bunches(
+                                byte_job_group_specs_bunches, job_group_bunch_sizes, job_group_progress_task
+                            )
                             # we need to recompute the specs now that the job group ID is absolute
                             job_specs = [spec.to_dict() for spec in self._job_specs]
-                            byte_job_specs_bunches, job_bunch_sizes = self._create_bunches(job_specs, max_bunch_bytesize, max_bunch_size)
+                            byte_job_specs_bunches, job_bunch_sizes = self._create_bunches(
+                                job_specs, max_bunch_bytesize, max_bunch_size
+                            )
 
-                        await self._submit_job_bunches(update_id, byte_job_specs_bunches, job_bunch_sizes, job_progress_task)
+                        await self._submit_job_bunches(
+                            update_id, byte_job_specs_bunches, job_bunch_sizes, job_progress_task
+                        )
                         start_job_id = await self._commit_update(update_id)
                         self._submission_info = BatchSubmissionInfo(used_fast_path=False)
                     log.info(f'updated batch {self.id}')
@@ -1289,21 +1363,26 @@ class Batch:
     MAX_BUNCH_BYTESIZE = 1024 * 1024
     MAX_BUNCH_SIZE = 1024
 
-    async def submit(self,
-                     max_bunch_bytesize: int = MAX_BUNCH_BYTESIZE,
-                     max_bunch_size: int = MAX_BUNCH_SIZE,
-                     disable_progress_bar: bool = False,
-                     *,
-                     progress: Optional[BatchProgressBar] = None
-                     ):
+    async def submit(
+        self,
+        max_bunch_bytesize: int = MAX_BUNCH_BYTESIZE,
+        max_bunch_size: int = MAX_BUNCH_SIZE,
+        disable_progress_bar: bool = False,
+        *,
+        progress: Optional[BatchProgressBar] = None,
+    ):
         assert max_bunch_bytesize > 0
         assert max_bunch_size > 0
 
         if progress:
-            start_job_id, start_job_group_id = await self._submit(max_bunch_bytesize, max_bunch_size, disable_progress_bar, progress)
+            start_job_id, start_job_group_id = await self._submit(
+                max_bunch_bytesize, max_bunch_size, disable_progress_bar, progress
+            )
         else:
             with BatchProgressBar(disable=disable_progress_bar) as progress2:
-                start_job_id, start_job_group_id = await self._submit(max_bunch_bytesize, max_bunch_size, disable_progress_bar, progress2)
+                start_job_id, start_job_group_id = await self._submit(
+                    max_bunch_bytesize, max_bunch_size, disable_progress_bar, progress2
+                )
 
         assert self.is_created
 
@@ -1342,14 +1421,16 @@ class HailExplicitTokenCredentials(CloudCredentials):
 
 class BatchClient:
     @staticmethod
-    async def create(billing_project: str,
-                     deploy_config: Optional[DeployConfig] = None,
-                     session: Optional[httpx.ClientSession] = None,
-                     headers: Optional[Dict[str, str]] = None,
-                     _token: Optional[str] = None,
-                     token_file: Optional[str] = None,
-                     *,
-                     cloud_credentials_file: Optional[str] = None):
+    async def create(
+        billing_project: str,
+        deploy_config: Optional[DeployConfig] = None,
+        session: Optional[httpx.ClientSession] = None,
+        headers: Optional[Dict[str, str]] = None,
+        _token: Optional[str] = None,
+        token_file: Optional[str] = None,
+        *,
+        cloud_credentials_file: Optional[str] = None,
+    ):
         if not deploy_config:
             deploy_config = get_deploy_config()
         url = deploy_config.base_url('batch')
@@ -1364,13 +1445,10 @@ class BatchClient:
             billing_project=billing_project,
             url=url,
             session=Session(credentials=credentials, http_session=session, timeout=aiohttp.ClientTimeout(total=30)),
-            headers=headers)
+            headers=headers,
+        )
 
-    def __init__(self,
-                 billing_project: str,
-                 url: str,
-                 session: Session,
-                 headers: Dict[str, str]):
+    def __init__(self, billing_project: str, url: str, session: Session, headers: Dict[str, str]):
         self.billing_project = billing_project
         self.url = url
         self._session: Session = session
@@ -1391,7 +1469,7 @@ class BatchClient:
     def reset_billing_project(self, billing_project):
         self.billing_project = billing_project
 
-    async def list_batches(self, q=None, last_batch_id=None, limit=2 ** 64, version=None):
+    async def list_batches(self, q=None, last_batch_id=None, limit=2**64, version=None):
         if version is None:
             version = 1
         n = 0
@@ -1423,10 +1501,7 @@ class BatchClient:
     async def get_job(self, batch_id, job_id):
         b = await self.get_batch(batch_id)
         j_resp = await self._get(f'/api/v1alpha/batches/{batch_id}/jobs/{job_id}')
-        j = cast(
-            GetJobResponseV1Alpha,
-            await j_resp.json()
-        )
+        j = cast(GetJobResponseV1Alpha, await j_resp.json())
         jg = b.get_job_group(j['job_group_id'])
         return Job.submitted_job(b, jg, j['job_id'], _status=j)
 
@@ -1444,19 +1519,17 @@ class BatchClient:
         assert isinstance(b, dict), b
         attributes = b.get('attributes')
         assert attributes is None or isinstance(attributes, dict), attributes
-        return Batch(self,
-                     id=b['id'],
-                     attributes=attributes,
-                     token=b['token'],
-                     last_known_status=b)
+        return Batch(self, id=b['id'], attributes=attributes, token=b['token'], last_known_status=b)
 
     def create_batch(self, attributes=None, callback=None, token=None, cancel_after_n_failures=None) -> Batch:
-        return Batch(self,
-                     id=None,
-                     attributes=attributes,
-                     callback=callback,
-                     token=token,
-                     cancel_after_n_failures=cancel_after_n_failures)
+        return Batch(
+            self,
+            id=None,
+            attributes=attributes,
+            callback=callback,
+            token=token,
+            cancel_after_n_failures=cancel_after_n_failures,
+        )
 
     async def get_billing_project(self, billing_project):
         bp_resp = await self._get(f'/api/v1alpha/billing_projects/{billing_project}')

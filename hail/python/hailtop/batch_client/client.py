@@ -121,10 +121,7 @@ class JobGroup:
     def cancel(self):
         return async_to_blocking(self._async_job_group.cancel())
 
-    def jobs(self,
-             q: Optional[str] = None,
-             version: Optional[int] = None,
-             recursive: bool = False):
+    def jobs(self, q: Optional[str] = None, version: Optional[int] = None, recursive: bool = False):
         return ait_to_blocking(self._async_job_group.jobs(q, version, recursive))
 
     # {
@@ -219,7 +216,7 @@ class Batch:
     def jobs(self, q=None, version=None):
         return ait_to_blocking(self._async_batch.jobs(q=q, version=version))
 
-    def job_groups(self, *, last_job_group_id=None, limit=2 ** 64):
+    def job_groups(self, *, last_job_group_id=None, limit=2**64):
         return ait_to_blocking(self._async_batch.job_groups(last_job_group_id=last_job_group_id, limit=limit))
 
     def get_job(self, job_id: int) -> Job:
@@ -238,40 +235,69 @@ class Batch:
     def delete(self):
         async_to_blocking(self._async_batch.delete())
 
-    def create_job_group(self,
-                         attributes: Optional[dict] = None,
-                         callback: Optional[str] = None,
-                         cancel_after_n_failures: Optional[int] = None) -> JobGroup:
-        return JobGroup(self._async_batch.create_job_group(
-            attributes=attributes, callback=callback, cancel_after_n_failures=cancel_after_n_failures
-        ))
+    def create_job_group(
+        self,
+        attributes: Optional[dict] = None,
+        callback: Optional[str] = None,
+        cancel_after_n_failures: Optional[int] = None,
+    ) -> JobGroup:
+        return JobGroup(
+            self._async_batch.create_job_group(
+                attributes=attributes, callback=callback, cancel_after_n_failures=cancel_after_n_failures
+            )
+        )
 
-    def create_job(self,
-                   image,
-                   command,
-                   *,
-                   env=None,
-                   port=None, resources=None, secrets=None,
-                   service_account=None, attributes=None, parents=None,
-                   input_files=None, output_files=None, always_run=False,
-                   timeout=None, cloudfuse=None, requester_pays_project=None,
-                   mount_tokens=False, network: Optional[str] = None,
-                   unconfined: bool = False, user_code: Optional[str] = None,
-                   regions: Optional[List[str]] = None,
-                   always_copy_output: bool = False) -> Job:
+    def create_job(
+        self,
+        image,
+        command,
+        *,
+        env=None,
+        port=None,
+        resources=None,
+        secrets=None,
+        service_account=None,
+        attributes=None,
+        parents=None,
+        input_files=None,
+        output_files=None,
+        always_run=False,
+        timeout=None,
+        cloudfuse=None,
+        requester_pays_project=None,
+        mount_tokens=False,
+        network: Optional[str] = None,
+        unconfined: bool = False,
+        user_code: Optional[str] = None,
+        regions: Optional[List[str]] = None,
+        always_copy_output: bool = False
+    ) -> Job:
         if parents:
             parents = [parent._async_job for parent in parents]
 
         async_job = self._async_batch.create_job(
-            image, command, env=env,
-            port=port, resources=resources, secrets=secrets,
+            image,
+            command,
+            env=env,
+            port=port,
+            resources=resources,
+            secrets=secrets,
             service_account=service_account,
-            attributes=attributes, parents=parents,
-            input_files=input_files, output_files=output_files, always_run=always_run,
-            always_copy_output=always_copy_output, timeout=timeout, cloudfuse=cloudfuse,
-            requester_pays_project=requester_pays_project, mount_tokens=mount_tokens,
-            network=network, unconfined=unconfined, user_code=user_code,
-            regions=regions)
+            attributes=attributes,
+            parents=parents,
+            input_files=input_files,
+            output_files=output_files,
+            always_run=always_run,
+            always_copy_output=always_copy_output,
+            timeout=timeout,
+            cloudfuse=cloudfuse,
+            requester_pays_project=requester_pays_project,
+            mount_tokens=mount_tokens,
+            network=network,
+            unconfined=unconfined,
+            user_code=user_code,
+            regions=regions,
+        )
 
         return Job(async_job)
 
@@ -294,15 +320,20 @@ class BatchClient:
         bc._async_client = async_client
         return bc
 
-    def __init__(self,
-                 billing_project: str,
-                 deploy_config: Optional[DeployConfig] = None,
-                 session: Optional[httpx.ClientSession] = None,
-                 headers: Optional[Dict[str, str]] = None,
-                 _token: Optional[str] = None,
-                 token_file: Optional[str] = None):
-        self._async_client = async_to_blocking(aioclient.BatchClient.create(
-            billing_project, deploy_config, session, headers=headers, _token=_token, token_file=token_file))
+    def __init__(
+        self,
+        billing_project: str,
+        deploy_config: Optional[DeployConfig] = None,
+        session: Optional[httpx.ClientSession] = None,
+        headers: Optional[Dict[str, str]] = None,
+        _token: Optional[str] = None,
+        token_file: Optional[str] = None,
+    ):
+        self._async_client = async_to_blocking(
+            aioclient.BatchClient.create(
+                billing_project, deploy_config, session, headers=headers, _token=_token, token_file=token_file
+            )
+        )
 
     @property
     def billing_project(self):
@@ -312,7 +343,9 @@ class BatchClient:
         self._async_client.reset_billing_project(billing_project)
 
     def list_batches(self, q=None, last_batch_id=None, limit=2**64, version=None):
-        for b in ait_to_blocking(self._async_client.list_batches(q=q, last_batch_id=last_batch_id, limit=limit, version=version)):
+        for b in ait_to_blocking(
+            self._async_client.list_batches(q=q, last_batch_id=last_batch_id, limit=limit, version=version)
+        ):
             yield Batch(b)
 
     def get_job(self, batch_id, job_id):
@@ -331,16 +364,10 @@ class BatchClient:
         b = async_to_blocking(self._async_client.get_batch(id))
         return Batch(b)
 
-    def create_batch(self,
-                     attributes=None,
-                     callback=None,
-                     token=None,
-                     cancel_after_n_failures=None
-                     ) -> 'Batch':
-        batch = self._async_client.create_batch(attributes=attributes,
-                                                callback=callback,
-                                                token=token,
-                                                cancel_after_n_failures=cancel_after_n_failures)
+    def create_batch(self, attributes=None, callback=None, token=None, cancel_after_n_failures=None) -> 'Batch':
+        batch = self._async_client.create_batch(
+            attributes=attributes, callback=callback, token=token, cancel_after_n_failures=cancel_after_n_failures
+        )
         return Batch(batch)
 
     def get_billing_project(self, billing_project):
