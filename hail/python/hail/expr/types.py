@@ -191,7 +191,7 @@ class HailType(object):
 
     @abc.abstractmethod
     def __str__(self):
-        return
+        return ""
 
     def __hash__(self):
         # FIXME this is a bit weird
