@@ -1450,11 +1450,11 @@ def import_gen(
     gen_table = import_lines(path, min_partitions)
     sample_table = import_lines(sample_file)
     rg = reference_genome.name if reference_genome else None
-    contig_recoding = contig_recoding
+    _contig_recoding = contig_recoding
     if contig_recoding is None:
-        contig_recoding = hl.empty_dict(hl.tstr, hl.tstr)
+        _contig_recoding = hl.empty_dict(hl.tstr, hl.tstr)
     else:
-        contig_recoding = hl.dict(contig_recoding)
+        _contig_recoding = hl.dict(contig_recoding)
 
     gen_table = gen_table.transmute(data=gen_table.text.split(' '))
 
@@ -1465,7 +1465,7 @@ def import_gen(
         last_rowf_idx = 4
         contig_holder = chromosome
 
-    contig_holder = contig_recoding.get(contig_holder, contig_holder)
+    contig_holder = _contig_recoding.get(contig_holder, contig_holder)
 
     position = hl.int(gen_table.data[last_rowf_idx - 2])
     alleles = hl.array([hl.str(gen_table.data[last_rowf_idx - 1]), hl.str(gen_table.data[last_rowf_idx])])

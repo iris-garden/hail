@@ -1227,18 +1227,18 @@ def merge_reference_blocks(ds, equivalence_function, merge_functions=None):
         if merge_functions:
             for k, f in merge_functions.items():
                 if isinstance(f, str):
-                    f = f.lower()
-                    if f == 'min':
+                    _f = f.lower()
+                    if _f == 'min':
 
                         def f(b1, b2):
                             return hl.min(block1[k], block2[k])
 
-                    elif f == 'max':
+                    elif _f == 'max':
 
                         def f(b1, b2):
                             return hl.max(block1[k], block2[k])
 
-                    elif f == 'sum':
+                    elif _f == 'sum':
 
                         def f(b1, b2):
                             return block1[k] + block2[k]
