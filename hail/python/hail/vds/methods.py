@@ -2,11 +2,11 @@ from typing import Sequence
 
 import hail as hl
 from hail import ir
-from hail.expr import expr_any, expr_array, expr_interval, expr_locus, expr_str, expr_bool
+from hail.expr import expr_any, expr_array, expr_bool, expr_interval, expr_locus, expr_str
 from hail.matrixtable import MatrixTable
 from hail.methods.misc import require_first_key_field_locus
 from hail.table import Table
-from hail.typecheck import sequenceof, typecheck, nullable, oneof, enumeration, func_spec, dictof
+from hail.typecheck import dictof, enumeration, func_spec, nullable, oneof, sequenceof, typecheck
 from hail.utils.java import Env, info, warning
 from hail.utils.misc import divide_null, new_temp_file, wrap_to_list
 from hail.vds.variant_dataset import VariantDataset
@@ -63,7 +63,7 @@ def to_dense_mt(vds: 'VariantDataset') -> 'MatrixTable':
         call_field = 'GT' if 'GT' in var else 'LGT'
         assert call_field in var, var.dtype
 
-        shared_fields = [call_field] + list(f for f in ref.dtype if f in var.dtype)
+        shared_fields = [call_field, *list(f for f in ref.dtype if f in var.dtype)]
         shared_field_set = set(shared_fields)
         var_fields = [f for f in var.dtype if f not in shared_field_set]
 
@@ -232,7 +232,7 @@ def sample_qc(
     else:
         ref_dp_field_to_use = dp_field
 
-    from hail.expr.functions import _num_allele_type, _allele_types
+    from hail.expr.functions import _allele_types, _num_allele_type
 
     allele_types = _allele_types[:]
     allele_types.extend(['Transition', 'Transversion'])
@@ -714,7 +714,7 @@ def _parameterized_filter_intervals(vds: 'VariantDataset', intervals, keep: bool
             schema=hl.tstruct(interval=intervals.dtype.element_type),
             key='interval',
         )
-        ref = segment_reference_blocks(reference_data, par_intervals).drop('interval_end', list(par_intervals.key)[0])
+        ref = segment_reference_blocks(reference_data, par_intervals).drop('interval_end', next(iter(par_intervals.key)))
         return VariantDataset(ref, hl.filter_intervals(vds.variant_data, intervals, keep))
 
 
@@ -870,7 +870,7 @@ def segment_reference_blocks(ref: 'MatrixTable', intervals: 'Table') -> 'MatrixT
     -------
     :class:`.MatrixTable`
     """
-    interval_field = list(intervals.key)[0]
+    interval_field = next(iter(intervals.key))
     if not intervals[interval_field].dtype == hl.tinterval(ref.locus.dtype):
         raise ValueError(
             f"expect intervals to be keyed by intervals of loci matching the VariantDataset:"

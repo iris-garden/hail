@@ -12,18 +12,19 @@ import hail as hl
 from hail.expr import HailType, tmatrix
 from hail.utils import FatalError, Interval
 from hail.utils.java import info, warning
+
+from ..variant_dataset import VariantDataset
 from .combine import (
-    combine_variant_datasets,
-    transform_gvcf,
-    defined_entry_fields,
-    make_variant_stream,
-    make_reference_stream,
-    combine_r,
     calculate_even_genome_partitioning,
     calculate_new_intervals,
     combine,
+    combine_r,
+    combine_variant_datasets,
+    defined_entry_fields,
+    make_reference_stream,
+    make_variant_stream,
+    transform_gvcf,
 )
-from ..variant_dataset import VariantDataset
 
 
 class VDSMetadata(NamedTuple):
@@ -212,7 +213,7 @@ class VariantDatasetCombiner:  # pylint: disable=too-many-instance-attributes
         '_call_fields',
     ]
 
-    __slots__ = tuple(__serialized_slots__ + ['_uuid', '_job_id', '__intervals_cache'])
+    __slots__ = tuple([*__serialized_slots__, "_uuid", "_job_id", "__intervals_cache"])
 
     def __init__(
         self,

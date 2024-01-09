@@ -20,15 +20,16 @@ Features:
 @author: nbaya
 """
 
-import hail as hl
-from hail.typecheck import typecheck, oneof, nullable
-from hail.expr.expressions import expr_float64, expr_int32, expr_array, expr_call
-from hail.matrixtable import MatrixTable
-from hail.table import Table
-from hail.utils.java import Env
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
+from scipy import stats
+
+import hail as hl
+from hail.expr.expressions import expr_array, expr_call, expr_float64, expr_int32
+from hail.matrixtable import MatrixTable
+from hail.table import Table
+from hail.typecheck import nullable, oneof, typecheck
+from hail.utils.java import Env
 
 
 @typecheck(
@@ -179,7 +180,7 @@ def make_betas(mt, h2, pi=None, annot=None, rg=None):
         h2 = h2 if isinstance(h2, list) else [h2]
         annot_sum = mt.aggregate_rows(hl.agg.sum(annot))
         mt = mt.annotate_rows(beta=hl.literal(h2).map(lambda x: hl.rand_norm(0, hl.sqrt(annot * x / (annot_sum * M)))))
-    elif len(h2) > 1 and (pi == [None] or pi == [1]):  # multi-trait correlated infinitesimal
+    elif len(h2) > 1 and (pi in ([None], [1])):  # multi-trait correlated infinitesimal
         mt, rg = multitrait_inf(mt=mt, h2=h2, rg=rg)
     elif len(h2) == 2 and len(pi) > 1 and len(rg) == 1:  # two trait correlated spike & slab
         print('multitrait ss')
@@ -662,7 +663,7 @@ def agg_fields(tb, coef_dict=None, str_expr=None, axis='rows'):
         :class:`.MatrixTable` or :class:`.Table` containing aggregation field.
     """
     assert str_expr is not None or coef_dict is not None, "str_expr and coef_dict cannot both be None"
-    assert axis == 'rows' or axis == 'cols', "axis must be 'rows' or 'cols'"
+    assert axis in ('rows', 'cols'), "axis must be 'rows' or 'cols'"
     coef_dict = get_coef_dict(tb=tb, str_expr=str_expr, ref_coef_dict=coef_dict, axis=axis)
     axis_field = 'annot' if axis == 'rows' else 'cov'
     annotate_fn = (
@@ -703,7 +704,7 @@ def get_coef_dict(tb, str_expr=None, ref_coef_dict=None, axis='rows'):
         `coef_dict` value, the row (or col) field name is specified by `coef_dict` key.
     """
     assert str_expr is not None or ref_coef_dict is not None, "str_expr and ref_coef_dict cannot both be None"
-    assert axis == 'rows' or axis == 'cols', "axis must be 'rows' or 'cols'"
+    assert axis in ('rows', 'cols'), "axis must be 'rows' or 'cols'"
     fields_to_search = tb.row if axis == 'rows' or isinstance(tb, Table) else tb.col
     # when axis='rows' we're searching for annotations, axis='cols' searching for covariates
     axis_field = 'annotation' if axis == 'rows' else 'covariate'

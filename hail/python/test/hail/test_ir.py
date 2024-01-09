@@ -1,15 +1,17 @@
 import re
 import unittest
+from test.hail.helpers import *
+
 import numpy as np
 from numpy.testing import assert_array_equal
+
 import hail as hl
-import hail.ir as ir
-from hail.ir.renderer import CSERenderer
+from hail import ir
 from hail.expr import construct_expr
 from hail.expr.types import tint32
-from hail.utils.java import Env
+from hail.ir.renderer import CSERenderer
 from hail.utils import new_temp_file
-from test.hail.helpers import *
+from hail.utils.java import Env
 
 
 class ValueIRTests(unittest.TestCase):
@@ -43,8 +45,8 @@ class ValueIRTests(unittest.TestCase):
         a = ir.Ref('a', env['a'])
         st = ir.Ref('st', env['st'])
         whitenStream = ir.Ref('whitenStream')
-        mat = ir.Ref('mat')
-        aa = ir.Ref('aa', env['aa'])
+        ir.Ref('mat')
+        ir.Ref('aa', env['aa'])
         sta = ir.Ref('sta', env['sta'])
         sts = ir.Ref('sts', env['sts'])
         da = ir.Ref('da', env['da'])
@@ -52,7 +54,7 @@ class ValueIRTests(unittest.TestCase):
         v = ir.Ref('v', env['v'])
         s = ir.Ref('s', env['s'])
         t = ir.Ref('t', env['t'])
-        call = ir.Ref('call', env['call'])
+        ir.Ref('call', env['call'])
         rngState = ir.RNGStateLiteral()
 
         table = ir.TableRange(5, 3)
@@ -460,7 +462,7 @@ class BlockMatrixIRTests(unittest.TestCase):
         backend.execute(ir.BlockMatrixWrite(bmir, ir.BlockMatrixPersistWriter('x', 'MEMORY_ONLY')))
         persist = ir.BlockMatrixRead(ir.BlockMatrixPersistReader('x', bmir))
 
-        for x in self.blockmatrix_irs() + [persist]:
+        for x in [*self.blockmatrix_irs(), persist]:
             backend._parse_blockmatrix_ir(str(x))
 
 

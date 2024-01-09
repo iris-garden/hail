@@ -1,8 +1,8 @@
-import os
-
 import itertools
 import math
+import os
 import re
+
 import numpy as np
 import scipy.linalg as spla
 
@@ -11,62 +11,62 @@ import hail.expr.aggregators as agg
 from hail.expr import construct_expr, construct_variable
 from hail.expr.blockmatrix_type import tblockmatrix
 from hail.expr.expressions import (
-    expr_float64,
-    matrix_table_source,
-    expr_ndarray,
-    raise_unless_entry_indexed,
-    expr_tuple,
     expr_array,
+    expr_float64,
     expr_int32,
     expr_int64,
+    expr_ndarray,
+    expr_tuple,
+    matrix_table_source,
+    raise_unless_entry_indexed,
 )
 from hail.ir import (
-    BlockMatrixWrite,
-    BlockMatrixMap2,
-    ApplyBinaryPrimOp,
     F64,
-    BlockMatrixBroadcast,
-    ValueToBlockMatrix,
-    BlockMatrixRead,
-    BlockMatrixMap,
+    ApplyBinaryPrimOp,
     ApplyUnaryPrimOp,
-    BlockMatrixDot,
-    BlockMatrixCollect,
-    tensor_shape_to_matrix_shape,
+    BandSparsifier,
     BlockMatrixAgg,
-    BlockMatrixRandom,
-    BlockMatrixToValueApply,
-    BlockMatrixToTable,
+    BlockMatrixBroadcast,
+    BlockMatrixCollect,
+    BlockMatrixDensify,
+    BlockMatrixDot,
     BlockMatrixFilter,
-    TableFromBlockMatrixNativeReader,
-    TableRead,
+    BlockMatrixMap,
+    BlockMatrixMap2,
+    BlockMatrixRandom,
+    BlockMatrixRead,
     BlockMatrixSlice,
     BlockMatrixSparsify,
-    BlockMatrixDensify,
+    BlockMatrixToTable,
+    BlockMatrixToValueApply,
+    BlockMatrixWrite,
+    ExportType,
+    PerBlockSparsifier,
     RectangleSparsifier,
     RowIntervalSparsifier,
-    BandSparsifier,
-    PerBlockSparsifier,
+    TableFromBlockMatrixNativeReader,
+    TableRead,
+    ValueToBlockMatrix,
+    tensor_shape_to_matrix_shape,
 )
-from hail.ir.blockmatrix_reader import BlockMatrixNativeReader, BlockMatrixBinaryReader
+from hail.ir.blockmatrix_reader import BlockMatrixBinaryReader, BlockMatrixNativeReader
 from hail.ir.blockmatrix_writer import BlockMatrixBinaryWriter, BlockMatrixNativeWriter, BlockMatrixRectanglesWriter
-from hail.ir import ExportType
 from hail.table import Table
 from hail.typecheck import (
+    enumeration,
+    func_spec,
+    lazy,
+    nullable,
+    numeric,
+    oneof,
+    sequenceof,
+    sized_tupleof,
+    sliceof,
+    tupleof,
     typecheck,
     typecheck_method,
-    nullable,
-    oneof,
-    sliceof,
-    sequenceof,
-    lazy,
-    enumeration,
-    numeric,
-    tupleof,
-    func_spec,
-    sized_tupleof,
 )
-from hail.utils import new_temp_file, local_path_uri, storage_level, with_local_temp_file, new_local_temp_file
+from hail.utils import local_path_uri, new_local_temp_file, new_temp_file, storage_level, with_local_temp_file
 from hail.utils.java import Env
 
 block_matrix_type = lazy()
@@ -1159,11 +1159,11 @@ class BlockMatrix(object):
             Sparse block matrix.
         """
         if isinstance(starts, np.ndarray):
-            if not (starts.dtype == np.int32 or starts.dtype == np.int64):
+            if starts.dtype not in (np.int32, np.int64):
                 raise ValueError("sparsify_row_intervals: starts ndarray must have dtype 'int32' or 'int64'")
             starts = [int(s) for s in starts]
         if isinstance(stops, np.ndarray):
-            if not (stops.dtype == np.int32 or stops.dtype == np.int64):
+            if stops.dtype not in (np.int32, np.int64):
                 raise ValueError("sparsify_row_intervals: stops ndarray must have dtype 'int32' or 'int64'")
             stops = [int(s) for s in stops]
 
@@ -1583,7 +1583,7 @@ class BlockMatrix(object):
 
         if splits != 1:
             inner_brange_size = int(math.ceil(self._n_block_cols / splits))
-            split_points = list(range(0, self._n_block_cols, inner_brange_size)) + [self._n_block_cols]
+            split_points = [*list(range(0, self._n_block_cols, inner_brange_size)), self._n_block_cols]
             inner_ranges = list(zip(split_points[:-1], split_points[1:]))
             blocks_to_multiply = [
                 (
@@ -1718,7 +1718,7 @@ class BlockMatrix(object):
         if axis is None:
             bmir = BlockMatrixAgg(self._bmir, [0, 1])
             return BlockMatrix(bmir)[0, 0]
-        elif axis == 0 or axis == 1:
+        elif axis in (0, 1):
             out_index_expr = [axis]
 
             bmir = BlockMatrixAgg(self._bmir, out_index_expr)
@@ -2548,7 +2548,7 @@ block_matrix_type.set(BlockMatrix)
 
 
 def _is_scalar(x):
-    return isinstance(x, float) or isinstance(x, int)
+    return isinstance(x, (float, int))
 
 
 def _shape_after_broadcast(left, right):
@@ -2559,7 +2559,7 @@ def _shape_after_broadcast(left, right):
     """
 
     def join_dim(l_size, r_size):
-        if not (l_size == r_size or l_size == 1 or r_size == 1):
+        if l_size not in (r_size, 1):
             raise ValueError(f'Incompatible shapes for broadcasting: {left}, {right}')
 
         return max(l_size, r_size)

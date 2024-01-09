@@ -1,7 +1,8 @@
-from hail import ir
 import abc
-from typing import Sequence, MutableSequence, List, Set, Dict, Optional
 from collections import namedtuple
+from typing import Dict, List, MutableSequence, Optional, Sequence, Set
+
+from hail import ir
 
 
 class Renderable(object):
@@ -309,11 +310,11 @@ class CSEAnalysisPass:
         def bind_depth(self) -> int:
             bind_depth = self.min_binding_depth
             if len(self.node.free_vars) > 0:
-                bind_depth = max(bind_depth, max(self.context[0][var] for var in self.node.free_vars))
+                bind_depth = max(bind_depth, *(self.context[0][var] for var in self.node.free_vars))
             if len(self.node.free_agg_vars) > 0:
-                bind_depth = max(bind_depth, max(self.context[1][var] for var in self.node.free_agg_vars))
+                bind_depth = max(bind_depth, *(self.context[1][var] for var in self.node.free_agg_vars))
             if len(self.node.free_scan_vars) > 0:
-                bind_depth = max(bind_depth, max(self.context[2][var] for var in self.node.free_scan_vars))
+                bind_depth = max(bind_depth, *(self.context[2][var] for var in self.node.free_scan_vars))
             return bind_depth
 
         def make_child_frame(self, depth: int):
@@ -545,11 +546,11 @@ class CSEPrintPass:
         def bind_depth(self) -> int:
             bind_depth = self.min_binding_depth
             if len(self.node.free_vars) > 0:
-                bind_depth = max(bind_depth, max(self.context[0][var] for var in self.node.free_vars))
+                bind_depth = max(bind_depth, *(self.context[0][var] for var in self.node.free_vars))
             if len(self.node.free_agg_vars) > 0:
-                bind_depth = max(bind_depth, max(self.context[1][var] for var in self.node.free_agg_vars))
+                bind_depth = max(bind_depth, *(self.context[1][var] for var in self.node.free_agg_vars))
             if len(self.node.free_scan_vars) > 0:
-                bind_depth = max(bind_depth, max(self.context[2][var] for var in self.node.free_scan_vars))
+                bind_depth = max(bind_depth, *(self.context[2][var] for var in self.node.free_scan_vars))
             return bind_depth
 
         def add_lets(self, let_bodies: Sequence[str], out_builder: MutableSequence[str]):

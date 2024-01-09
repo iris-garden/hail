@@ -2,9 +2,8 @@ import unittest
 
 import hail as hl
 import hail.expr.aggregators as agg
-from hail.utils.misc import new_temp_file
-from ..helpers import *
 
+from ..helpers import *
 
 GCS_REQUESTER_PAYS_PROJECT = os.environ.get('GCS_REQUESTER_PAYS_PROJECT')
 
@@ -298,7 +297,7 @@ class Tests(unittest.TestCase):
 
     def test_charr(self):
         mt = hl.import_vcf(resource('sample.vcf'))
-        es = mt.select_rows().entries()
+        mt.select_rows().entries()
         charr = hl.compute_charr(mt, ref_AF=0.9)
         d = charr.aggregate(hl.dict(hl.agg.collect((charr.s, charr.charr))))
 
