@@ -39,7 +39,7 @@ async def main(github_issue_number: int, github_token: str) -> None:
             else:
                 with open(f"./discourse-export/{data['id']}_{slug}.json", "r") as file:
                     json = sub(
-                        f'{POST_LINK_ID}/(.*?)"',
+                        f'{POST_LINK_ID}/{dest}"',
                         f"https://github.com/hail-is/hail/issues/{github_issue_number + dest_data['idx']}\\\"",
                         file.read(),
                     )

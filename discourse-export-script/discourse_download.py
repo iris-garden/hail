@@ -3,6 +3,7 @@ from asyncio import gather, run, sleep
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from json import dump, loads
+from re import sub
 from typing import Any, Callable, Dict, List, Tuple, TypeVar
 
 from aiohttp import ClientSession
@@ -20,6 +21,7 @@ class DiscoursePost:
     id: int
     topic_id: int
     username: str
+    created_at: str
     html: str
 
 
@@ -36,7 +38,6 @@ class DiscourseHTMLParser(HTMLParser):
     def __init__(self: "DiscourseHTMLParser") -> None:
         super().__init__()
         self.output_html = ""
-        self.post_links = set()
         # relative file links starting with /
         self.relative_link = False
         # link previews and quotes
@@ -76,7 +77,6 @@ class DiscourseHTMLParser(HTMLParser):
                     self.relative_link = True
                 elif "https://discuss.hail.is/t/" in link:
                     slug = link.removeprefix("https://discuss.hail.is/t/").split("/")[0]
-                    self.post_links.add(slug)
                     self.output_html += f'<a href="{POST_LINK_ID}/{slug}">'
                 else:
                     self._write_starttag(attrs, tag, suffix)
@@ -124,6 +124,8 @@ class DiscourseHTMLParser(HTMLParser):
         self.output_html += f"<!--{data}-->"
 
     def handle_data(self: "DiscourseHTMLParser", data: str) -> None:
+        if "https://discuss.hail.is/t/" in data:
+            data = sub('https://discuss.hail.is/t/([A-Za-z0-9\\-]*?)', f'{POST_LINK_ID}/\\1', data)
         if self.mention:
             self.output_html += f'{data.partition("@")[2]}'
         elif self.aside_src is not None and not self.aside_src_written:
@@ -185,11 +187,11 @@ async def main(discourse_page: int) -> None:
         topics = []
         for topic_id, topic in topic_acc.items():
             if topic["fields"]["slug"] != "welcome-to-the-hail-community":
-                topic_html = ""
+                topic_html = "> [!NOTE]\n> The following post was exported from discuss.hail.is, a forum for asking questions about Hail which has since been deprecated.\n\n"
                 for post in topic["posts"]:
                     parser = DiscourseHTMLParser()
                     parser.feed(post.html)
-                    topic_html += f"<h2>{post.username} said:</h2>\n{parser.output_html}\n\n"
+                    topic_html += f"<h2>({post.created_at}) {post.username} said:</h2>\n{parser.output_html}\n\n"
                 with open(f'./discourse-export/{topic["fields"]["id"]:04}_{topic["fields"]["slug"]}.json', 'w') as file:
                     dump(
                         {
@@ -232,6 +234,7 @@ async def parse_post(post_id: int, session: ClientSession) -> None:
             response_json["id"],
             response_json["topic_id"],
             response_json["username"],
+            response_json["created_at"],
             response_json["cooked"],
         )
 
