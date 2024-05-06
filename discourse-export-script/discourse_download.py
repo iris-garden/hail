@@ -1,12 +1,16 @@
 from argparse import ArgumentParser
 from asyncio import gather, run, sleep
 from dataclasses import dataclass
+from datetime import datetime
 from html.parser import HTMLParser
 from json import dump, loads
 from re import sub
 from typing import Any, Callable, Dict, List, Tuple, TypeVar
 
 from aiohttp import ClientSession
+
+strptime = datetime.strptime
+strftime = datetime.strftime
 
 # constants
 POST_LINK_ID = "f4706281-cc60-4ff0-a0b6-b803683cc24b"
@@ -191,7 +195,7 @@ async def main(discourse_page: int) -> None:
                 for post in topic["posts"]:
                     parser = DiscourseHTMLParser()
                     parser.feed(post.html)
-                    topic_html += f"<h2>({post.created_at}) {post.username} said:</h2>\n{parser.output_html}\n\n"
+                    topic_html += f"<h2>({strptime(post.created_at, "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%b %d, %Y at %H:%M")}) {post.username} said:</h2>\n{parser.output_html}\n\n"
                 with open(f'./discourse-export/{topic["fields"]["id"]:04}_{topic["fields"]["slug"]}.json', 'w') as file:
                     dump(
                         {

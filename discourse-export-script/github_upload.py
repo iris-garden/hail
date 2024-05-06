@@ -67,7 +67,7 @@ async def main(github_issue_number: int, github_token: str) -> None:
 
 async def create_issue(topic: Dict[str, Any], session: ClientSession, github_token: str) -> bool:
     async with session.post(
-        "https://api.github.com/repos/hail-is/hail/issues",
+        "https://api.github.com/repos/iris-garden/test-process/issues",
         json={"title": topic["title"], "body": topic["html"], "labels": ["discourse"]},
         headers={
             "Accept": "application/vnd.github+json",
