@@ -33,6 +33,12 @@ async def main(github_issue_number: int, github_token: str) -> None:
         for dest in data["dests"]:
             dest_data = links.get(dest, None)
             if dest_data is None:
+                # TODO sometimes the dest here is grabbing too much text after the link, whats up with that
+                """
+broken link: illegalargumentexception->error-summary-illegalargumentexception-requirement-failed/2474/8</a></p>\n<p>Could you have a look what is going on here ?</p>\n\n\n```python\nIn [13]: mtf = hl.filter_intervals(mt, [hl.parse_locus_interval('chr19:50927163-50927163', reference_genome=rg)])\n\nIn [14]: mtf.show()\n---------------------------------------------------------------------------\nFatalError                                Traceback (most recent call last)\nFile /usr/local/lib/python3.11/dist-packages/IPython/core/formatters.py:711, in PlainTextFormatter.__call__(self, obj)\n    704 stream = StringIO()\n    705 printer = pretty.RepresentationPrinter(stream, self.verbose,\n    706     self.max_width, self.newline,\n    707     max_seq_length=self.max_seq_length,\n    708     singleton_pprinters=self.singleton_printers,\n    709     type_pprinters=self.type_printers,\n    710     deferred_pprinters=self.deferred_printers)\n--> 711 printer.pretty(obj)\n    712 printer.flush()\n    713 return stream.getvalue()\n\nFile /usr/local/lib/python3.11/dist-packages/IPython/lib/pretty.py:411, in RepresentationPrinter.pretty(self, obj)\n    408                         return meth(obj, self, cycle)\n    409                 if cls is not object \\\n    410                         and callable(cls.__dict__.get('__repr__')):\n--> 411                     return _repr_pprint(obj, self, cycle)\n    413     return _default_pprint(obj, self, cycle)\n    414 finally:\n\nFile /usr/local/lib/python3.11/dist-packages/IPython/lib/pretty.py:779, in _repr_pprint(obj, p, cycle)\n    777  (https://github.com/hail-is/hail/issues/3595)
+broken link: illegalargumentexception->error-summary-illegalargumentexception-requirement-failed (https://github.com/hail-is/hail/issues/3595)
+broken link: ploidy-error-when-trying-to-extract-x-chromosome-snps->error-summary-hailexception-only-support-ploidy-2-and-unphased-found-1-1 (https://github.com/hail-is/hail/issues/3599)
+                """
                 print(
                     f"broken link: {slug}->{dest} (https://github.com/hail-is/hail/issues/{github_issue_number + data['idx']})"
                 )

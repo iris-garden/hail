@@ -195,7 +195,7 @@ async def main(discourse_page: int) -> None:
                 for post in topic["posts"]:
                     parser = DiscourseHTMLParser()
                     parser.feed(post.html)
-                    topic_html += f"<h2>({strptime(post.created_at, "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%b %d, %Y at %H:%M")}) {post.username} said:</h2>\n{parser.output_html}\n\n"
+                    topic_html += f"<h2>({strptime(post.created_at, '%Y-%m-%dT%H:%M:%S.%fZ').strftime('%b %d, %Y at %H:%M')}) {post.username} said:</h2>\n{parser.output_html}\n\n"
                 with open(f'./discourse-export/{topic["fields"]["id"]:04}_{topic["fields"]["slug"]}.json', 'w') as file:
                     dump(
                         {
