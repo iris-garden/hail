@@ -14,6 +14,7 @@ strftime = datetime.strftime
 
 # constants
 POST_LINK_ID = "f4706281-cc60-4ff0-a0b6-b803683cc24b"
+COMMENT_END_ID = "917f6034-2117-4a8c-bb42-b27fd7fb5e83"
 
 # types
 CallbackResponse = TypeVar("CallbackResponse")
@@ -191,11 +192,11 @@ async def main(discourse_page: int) -> None:
         topics = []
         for topic_id, topic in topic_acc.items():
             if topic["fields"]["slug"] != "welcome-to-the-hail-community":
-                topic_html = "> [!NOTE]\n> The following post was exported from discuss.hail.is, a forum for asking questions about Hail which has since been deprecated.\n\n"
-                for post in topic["posts"]:
+                topic_html = ""
+                for idx, post in enumerate(topic["posts"]):
                     parser = DiscourseHTMLParser()
                     parser.feed(post.html)
-                    topic_html += f"<h2>({strptime(post.created_at, '%Y-%m-%dT%H:%M:%S.%fZ').strftime('%b %d, %Y at %H:%M')}) {post.username} said:</h2>\n{parser.output_html}\n\n"
+                    topic_html += f"> [!NOTE]\n> The following post was exported from discuss.hail.is, a forum for asking questions about Hail which has since been deprecated.\n\n## ({strptime(post.created_at, '%Y-%m-%dT%H:%M:%S.%fZ').strftime('%b %d, %Y at %H:%M')}) {post.username} said:\n{parser.output_html} {COMMENT_END_ID if idx < (len(topic['posts']) - 1) else ''}"
                 with open(f'./discourse-export/{topic["fields"]["id"]:04}_{topic["fields"]["slug"]}.json', 'w') as file:
                     dump(
                         {
