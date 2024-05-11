@@ -17,6 +17,7 @@ POST_LINK_ID = "f4706281-cc60-4ff0-a0b6-b803683cc24b"
 COMMENT_END_ID = "917f6034-2117-4a8c-bb42-b27fd7fb5e83"
 
 
+# TODO i think the numbering is off?
 async def main(github_issue_number: int, github_token: str) -> None:
     links = {}
     for idx, filename in enumerate(sorted(listdir("./discourse-export"))):
@@ -27,7 +28,7 @@ async def main(github_issue_number: int, github_token: str) -> None:
                 links[slug] = {
                     "id": id,
                     "idx": idx,
-                    "dests": set([slug[:-1] for slug in findall(f'{POST_LINK_ID}/([A-Za-z0-9\\-]*?)"', file.read())]),
+                    "dests": set([slug for slug in findall(f'{POST_LINK_ID}/([A-Za-z0-9\\-]*?)\\\\"', file.read())]),
                 }
     for slug, data in links.items():
         for dest in data["dests"]:
@@ -37,6 +38,9 @@ async def main(github_issue_number: int, github_token: str) -> None:
                     f"broken link: {slug}->{dest} (https://github.com/hail-is/hail/issues/{github_issue_number + data['idx']})"
                 )
             else:
+                print(
+                    f"link: {slug} (https://github.com/hail-is/hail/issues/{github_issue_number + data['idx']}) -> {dest} (https://github.com/hail-is/hail/issues/{github_issue_number + dest_data['idx']})"
+                )
                 with open(f"./discourse-export/{data['id']}_{slug}.json", "r") as file:
                     json = sub(
                         f'{POST_LINK_ID}/{dest}"',
@@ -46,11 +50,10 @@ async def main(github_issue_number: int, github_token: str) -> None:
                 with open(f"./discourse-export/{data['id']}_{slug}.json", "w") as file:
                     file.write(json)
     async with ClientSession() as session:
-        count = 0
         for issue in sorted([{"slug": slug, **data} for slug, data in links.items()], key=lambda x: x["idx"]):
             with open(f"./discourse-export/{issue['id']}_{issue['slug']}.json", "r") as file:
                 topic = load(file)
-            discussion_id, label_applied, comment_idx = [None, False, None]
+            discussion_id, label_applied, comment_idx = [None, False, 0]
             comments = topic["html"].split(COMMENT_END_ID)
             discussion_html = comments[0]
             rest_comments = comments[1:]
@@ -60,7 +63,7 @@ async def main(github_issue_number: int, github_token: str) -> None:
                 )
             while not label_applied:
                 label_applied = next(iter(await gather(apply_label(discussion_id, session, github_token))))
-            while comment_idx < (len(rest_comments) - 1):
+            while comment_idx < (len(rest_comments)):
                 comment_idx = next(
                     iter(
                         await gather(
@@ -72,12 +75,6 @@ async def main(github_issue_number: int, github_token: str) -> None:
                 f"./discourse-export/{issue['id']}_{issue['slug']}.json",
                 f"./uploaded/{issue['id']}_{issue['slug']}.json",
             )
-            if count < 19:
-                count += 1
-            else:
-                count = 0
-                print("Waiting for 2 minutes...")
-                await sleep(120)
 
 
 async def add_comment(comment_idx, comment_html, discussion_id, session, github_token):
@@ -86,7 +83,7 @@ async def add_comment(comment_idx, comment_html, discussion_id, session, github_
       addDiscussionComment (
         input: {{
           discussionId: "{discussion_id}"
-          body: "{comment_html}"
+          body: {dumps(comment_html)}
         }}
       ) {{
         comment {{
@@ -106,8 +103,8 @@ async def add_comment(comment_idx, comment_html, discussion_id, session, github_
         },
     ) as comment_response:
         comment_response_json = loads(await comment_response.read())
-        print(comment_response_json)
         if comment_response_json.get("errors", None) is not None:
+            print(comment_response_json)
             await handle_error(comment_response.headers)
             return comment_idx
     return comment_idx + 1
@@ -141,8 +138,8 @@ async def apply_label(discussion_id, session, github_token):
         },
     ) as label_response:
         label_response_json = loads(await label_response.read())
-        print(label_response_json)
         if label_response_json.get("errors", None) is not None:
+            print(label_response_json)
             await handle_error(label_response.headers)
             return False
     return True
@@ -176,8 +173,8 @@ async def create_discussion(discussion_html, discussion_title, session: ClientSe
         },
     ) as discussion_response:
         discussion_response_json = loads(await discussion_response.read())
-        print(discussion_response_json)
         if discussion_response_json.get("errors", None) is not None:
+            print(discussion_response_json)
             await handle_error(discussion_response.headers)
             return None
         return discussion_response_json["data"]["createDiscussion"]["discussion"]["id"]
