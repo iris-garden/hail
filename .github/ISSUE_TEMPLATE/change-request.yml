@@ -19,6 +19,8 @@ body:
           - Low
           - Medium
           - High
+    validations:
+      required: true
   - type: textarea
     id: security-impact-description
     attributes:
