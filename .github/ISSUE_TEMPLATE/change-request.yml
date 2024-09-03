@@ -15,7 +15,7 @@ body:
       label: Security Impact
       description: Level of security impact of the change
       options:
-          - None
+          - No impact
           - Low
           - Medium
           - High
